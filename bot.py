@@ -8,9 +8,28 @@ import io
 from flask import Flask, request
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-bot = telebot.TeleBot(BOT_TOKEN)
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://saviour-bot-014v.onrender.com")
 
+bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
+
+# ---------- AUTO SET WEBHOOK ----------
+def set_webhook():
+    try:
+        webhook_url = f"{RENDER_URL}/{BOT_TOKEN}"
+        r = requests.get(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
+            params={
+                "url": webhook_url,
+                "allowed_updates": '["message","callback_query"]'
+            },
+            timeout=10
+        )
+        print("Webhook set:", r.json())
+    except Exception as e:
+        print("Webhook error:", e)
+
+set_webhook()
 
 # ---------- MAIN MENU ----------
 def main_menu(chat_id, message_id=None):
@@ -44,36 +63,25 @@ def handle(c):
 
     if c.data == "menu":
         main_menu(chat_id, msg_id)
-
     elif c.data == "voice":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text(
-            "🎙 *Voice Tool*\n\nType:\n`/say your text here`\n\n"
-            "Example: `/say Hello world`",
+        bot.edit_message_text("🎙 *Voice Tool*\n\nType:\n`/say your text here`",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
-
     elif c.data == "lyrics":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text(
-            "📝 *Lyrics Tool*\n\nType:\n`/lrc song name - artist`\n\n"
-            "Example: `/lrc Shape of You - Ed Sheeran`\n\n"
-            "You'll get back a `.lrc` file with timestamps.",
+        bot.edit_message_text("📝 *Lyrics Tool*\n\nType:\n`/lrc song - artist`",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
-
     elif c.data == "reply":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text(
-            "💬 *Auto-Reply*\n\nComing soon...",
+        bot.edit_message_text("💬 *Auto-Reply*\n\nComing soon...",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
-
     elif c.data == "upgrade":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text(
-            "💎 *Premium*\n\nComing soon...",
+        bot.edit_message_text("💎 *Premium*\n\nComing soon...",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
 
 # ---------- VOICE TOOL ----------
@@ -115,8 +123,7 @@ def lrc_cmd(m):
         return
 
     if not data:
-        bot.reply_to(m, "❌ No lyrics found. Try `song name - artist`.",
-                     parse_mode="Markdown")
+        bot.reply_to(m, "❌ No lyrics found.")
         return
 
     song = None
@@ -126,13 +133,20 @@ def lrc_cmd(m):
             break
 
     if not song:
-        bot.reply_to(m, "⚠️ Found the song but no synced (timestamped) lyrics available.")
+        bot.reply_to(m, "⚠️ No synced lyrics available for this song.")
         return
+
+    lrc = ""
+    lrc += f"[ti:{song['trackName']}]\n"
+    lrc += f"[ar:{song['artistName']}]\n"
+    lrc += f"[al:{song.get('albumName', '')}]\n"
+    lrc += f"[by:SAVIOUR Bot]\n\n"
+    lrc += song["syncedLyrics"]
 
     filename = f"{song['artistName']} - {song['trackName']}.lrc"
     filename = filename.replace("/", "-").replace("\\", "-")
 
-    file_bytes = io.BytesIO(song["syncedLyrics"].encode("utf-8"))
+    file_bytes = io.BytesIO(lrc.encode("utf-8"))
     file_bytes.name = filename
 
     bot.send_document(m.chat.id, file_bytes,
@@ -143,7 +157,7 @@ def lrc_cmd(m):
 def fallback(m):
     bot.reply_to(m, "Type /start to see the menu.")
 
-# ---------- WEBHOOK ----------
+# ---------- WEBHOOK ROUTE ----------
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
