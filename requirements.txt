@@ -1,0 +1,4 @@
+pyTelegramBotAPI
+edge-tts
+flask
+requests
