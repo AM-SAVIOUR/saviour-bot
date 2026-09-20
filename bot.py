@@ -10,8 +10,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 app = Flask(__name__)
 
-@bot.message_handler(commands=['start'])
-def start(m):
+def main_menu(chat_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🎙 Voice", callback_data="voice"),
@@ -19,9 +18,48 @@ def start(m):
         types.InlineKeyboardButton("💬 Auto-Reply", callback_data="reply"),
         types.InlineKeyboardButton("💎 Premium", callback_data="upgrade"),
     )
-    bot.send_message(m.chat.id,
-        "🌑 *Welcome to SAVIOUR*\n━━━━━━━━━━━━━━━━━━━━\n\nYour all-in-one assistant.",
-        reply_markup=markup, parse_mode="Markdown")
+    text = ("🌑 *Welcome to SAVIOUR*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Your all-in-one assistant.\n\n"
+            "Choose a tool below:")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(commands=['start'])
+def start(m):
+    main_menu(m.chat.id)
+
+@bot.callback_query_handler(func=lambda c: True)
+def handle(c):
+    bot.answer_callback_query(c.id)
+    chat_id = c.message.chat.id
+    msg_id = c.message.message_id
+
+    if c.data == "menu":
+        main_menu(chat_id, msg_id)
+    elif c.data == "voice":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text("🎙 *Voice Tool*\n\nType:\n`/say your text here`",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "lyrics":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text("📝 *Lyrics Tool*\n\nComing soon...",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "reply":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text("💬 *Auto-Reply*\n\nComing soon...",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "upgrade":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text("💎 *Premium*\n\nComing soon...",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['say'])
 def say(m):
@@ -35,29 +73,6 @@ def say(m):
         communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
         await communicate.save("voice.mp3")
 
-    try:
-        asyncio.run(make_voice())
-        with open("voice.mp3", "rb") as f:
-            bot.send_voice(m.chat.id, f)
-    except Exception as e:
-        bot.reply_to(m, f"⚠️ Error: {e}")
-
-@bot.message_handler(func=lambda m: True)
-def fallback(m):
-    bot.reply_to(m, "Type /start to see the menu.")
-
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "ok", 200
-
-@app.route("/")
-def index():
-    return "SAVIOUR is running", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     try:
         asyncio.run(make_voice())
         with open("voice.mp3", "rb") as f:
