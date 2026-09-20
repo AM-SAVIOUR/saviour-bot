@@ -13,14 +13,16 @@ RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://saviour-bot-014v.onr
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
+# Track which mode each user is in
+user_mode = {}  # {chat_id: "voice" | "lyrics" | None}
+
 # ---------- AUTO SET WEBHOOK ----------
 def set_webhook():
     try:
-        webhook_url = f"{RENDER_URL}/{BOT_TOKEN}"
         r = requests.get(
             f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
             params={
-                "url": webhook_url,
+                "url": f"{RENDER_URL}/{BOT_TOKEN}",
                 "allowed_updates": '["message","callback_query"]'
             },
             timeout=10
@@ -33,6 +35,7 @@ set_webhook()
 
 # ---------- MAIN MENU ----------
 def main_menu(chat_id, message_id=None):
+    user_mode[chat_id] = None
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🎙 Voice", callback_data="voice"),
@@ -43,7 +46,8 @@ def main_menu(chat_id, message_id=None):
     text = ("🌑 *Welcome to SAVIOUR*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "Your all-in-one assistant.\n\n"
-            "Choose a tool below:")
+            "Tap a tool, then just type your message.\n"
+            "No commands needed.")
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
             reply_markup=markup, parse_mode="Markdown")
@@ -63,67 +67,70 @@ def handle(c):
 
     if c.data == "menu":
         main_menu(chat_id, msg_id)
+
     elif c.data == "voice":
+        user_mode[chat_id] = "voice"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text("🎙 *Voice Tool*\n\nType:\n`/say your text here`",
+        bot.edit_message_text(
+            "🎙 *Voice Mode ON*\n\n"
+            "Now just type your message — I'll turn it into a voice note.\n\n"
+            "Example: `Good morning everyone`",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+
     elif c.data == "lyrics":
+        user_mode[chat_id] = "lyrics"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text("📝 *Lyrics Tool*\n\nType:\n`/lrc song - artist`",
+        bot.edit_message_text(
+            "📝 *Lyrics Mode ON*\n\n"
+            "Now just type the song name — I'll send the .lrc file.\n\n"
+            "Example: `Shape of You - Ed Sheeran`",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+
     elif c.data == "reply":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text("💬 *Auto-Reply*\n\nComing soon...",
+        bot.edit_message_text(
+            "💬 *Auto-Reply*\n\nComing soon...",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+
     elif c.data == "upgrade":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text("💎 *Premium*\n\nComing soon...",
+        bot.edit_message_text(
+            "💎 *Premium*\n\nComing soon...",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
 
-# ---------- VOICE TOOL ----------
-@bot.message_handler(commands=['say'])
-def say(m):
-    text = m.text.replace('/say', '', 1).strip()
-    if not text:
-        bot.reply_to(m, "Usage: `/say your text here`", parse_mode="Markdown")
-        return
-    bot.reply_to(m, "🎙 Generating voice...")
+# ---------- VOICE FUNCTION ----------
+def make_voice_note(chat_id, text):
+    bot.send_message(chat_id, "🎙 Generating voice...")
 
-    async def make_voice():
+    async def _make():
         communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
         await communicate.save("voice.mp3")
 
     try:
-        asyncio.run(make_voice())
+        asyncio.run(_make())
         with open("voice.mp3", "rb") as f:
-            bot.send_voice(m.chat.id, f)
+            bot.send_voice(chat_id, f)
     except Exception as e:
-        bot.reply_to(m, f"⚠️ Error: {e}")
+        bot.send_message(chat_id, f"⚠️ Error: {e}")
 
-# ---------- LYRICS TOOL ----------
-@bot.message_handler(commands=['lrc'])
-def lrc_cmd(m):
-    query = m.text.replace('/lrc', '', 1).strip()
-    if not query:
-        bot.reply_to(m, "Usage: `/lrc song name - artist`", parse_mode="Markdown")
-        return
-
-    bot.reply_to(m, "🔎 Searching lyrics...")
+# ---------- LYRICS FUNCTION ----------
+def send_lrc(chat_id, query):
+    bot.send_message(chat_id, "🔎 Searching lyrics...")
 
     try:
         r = requests.get("https://lrclib.net/api/search",
                          params={"q": query}, timeout=15)
         data = r.json()
     except Exception as e:
-        bot.reply_to(m, f"⚠️ Search error: {e}")
+        bot.send_message(chat_id, f"⚠️ Search error: {e}")
         return
 
     if not data:
-        bot.reply_to(m, "❌ No lyrics found.")
+        bot.send_message(chat_id, "❌ No lyrics found.")
         return
 
     song = None
@@ -133,31 +140,62 @@ def lrc_cmd(m):
             break
 
     if not song:
-        bot.reply_to(m, "⚠️ No synced lyrics available for this song.")
+        bot.send_message(chat_id, "⚠️ No synced lyrics available.")
         return
 
-    lrc = ""
-    lrc += f"[ti:{song['trackName']}]\n"
+    raw = song["syncedLyrics"].strip()
+    lrc = f"[ti:{song['trackName']}]\n"
     lrc += f"[ar:{song['artistName']}]\n"
     lrc += f"[al:{song.get('albumName', '')}]\n"
     lrc += f"[by:SAVIOUR Bot]\n\n"
-    lrc += song["syncedLyrics"]
+    lrc += raw
 
     filename = f"{song['artistName']} - {song['trackName']}.lrc"
     filename = filename.replace("/", "-").replace("\\", "-")
 
+    # UTF-8 without BOM
     file_bytes = io.BytesIO(lrc.encode("utf-8"))
     file_bytes.name = filename
 
-    bot.send_document(m.chat.id, file_bytes,
+    bot.send_document(chat_id, file_bytes,
         caption=f"🎤 {song['trackName']} — {song['artistName']}\n⏱ Timestamps included")
 
-# ---------- FALLBACK ----------
-@bot.message_handler(func=lambda m: True)
-def fallback(m):
-    bot.reply_to(m, "Type /start to see the menu.")
+# ---------- STILL SUPPORT /say AND /lrc ----------
+@bot.message_handler(commands=['say'])
+def say_cmd(m):
+    text = m.text.replace('/say', '', 1).strip()
+    if text:
+        make_voice_note(m.chat.id, text)
 
-# ---------- WEBHOOK ROUTE ----------
+@bot.message_handler(commands=['lrc'])
+def lrc_cmd(m):
+    query = m.text.replace('/lrc', '', 1).strip()
+    if query:
+        send_lrc(m.chat.id, query)
+
+# ---------- MAIN MESSAGE HANDLER ----------
+@bot.message_handler(func=lambda m: True)
+def handle_message(m):
+    chat_id = m.chat.id
+    text = (m.text or "").strip()
+
+    if not text:
+        return
+
+    mode = user_mode.get(chat_id)
+
+    if mode == "voice":
+        make_voice_note(chat_id, text)
+        return
+
+    if mode == "lyrics":
+        send_lrc(chat_id, text)
+        return
+
+    # Fallback — no mode set
+    bot.reply_to(m, "Tap /start to choose a tool, or use the menu buttons.")
+
+# ---------- WEBHOOK ----------
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
