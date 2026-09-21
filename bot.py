@@ -128,6 +128,8 @@ def is_banned(uid):
     return bool(u and u["banned"] == 1)
 
 def can_use(uid, kind):
+    if uid == ADMIN_ID:
+        return True
     if is_paid(uid):
         return True
     u = get_user(uid)
