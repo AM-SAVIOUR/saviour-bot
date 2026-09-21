@@ -5,29 +5,36 @@ import edge_tts
 import asyncio
 import requests
 import io
-import sqlite3
-import datetime
+import json
 from flask import Flask, request
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://saviour-bot-014v.onrender.com")
+CREATOR 👑 = "I_AM_SAVIOUR_1"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 user_mode = {}
-
-# ---------- BUSINESS: who connected ----------
-business_owner = {}  # {business_connection_id: owner_user_id}
+business_owner = {}
+AWAY_MESSAGES = {}
 
 # ---------- AUTO SET WEBHOOK ----------
 def set_webhook():
     try:
-        r = requests.get(
+        allowed = json.dumps([
+            "message",
+            "callback_query",
+            "business_connection",
+            "business_message",
+            "edited_business_message",
+            "deleted_business_messages"
+        ])
+        r = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
-            params={
+            data={
                 "url": f"{RENDER_URL}/{BOT_TOKEN}",
-                "allowed_updates": '["message","callback_query","business_connection","business_message"]'
+                "allowed_updates": allowed
             },
             timeout=10
         )
@@ -46,11 +53,13 @@ def main_menu(chat_id, message_id=None):
         types.InlineKeyboardButton("📝 Lyrics", callback_data="lyrics"),
         types.InlineKeyboardButton("💬 Auto-Reply", callback_data="reply"),
         types.InlineKeyboardButton("💎 Premium", callback_data="upgrade"),
+        types.InlineKeyboardButton("❓ Help", callback_data="help"),
     )
     text = ("🌑 *Welcome to SAVIOUR*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "Your all-in-one assistant.\n\n"
-            "Tap a tool, then just type your message.")
+            "Tap a tool, then just type your message.\n\n"
+            f"👑 *Creator:* @{CREATOR}")
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
             reply_markup=markup, parse_mode="Markdown")
@@ -61,7 +70,29 @@ def main_menu(chat_id, message_id=None):
 def start(m):
     main_menu(m.chat.id)
 
-# ---------- BUTTON HANDLER ----------
+# ---------- HELP PAGE ----------
+def help_text():
+    return ("❓ *SAVIOUR — Help Guide*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🎙 *Voice Tool*\n"
+            "Turn any text into a voice note.\n"
+            "→ Tap Voice, then type your message\n"
+            "→ Or use `/say your text`\n\n"
+            "📝 *Lyrics Tool*\n"
+            "Get a synced `.lrc` file for any song.\n"
+            "→ Tap Lyrics, then type: song - artist\n"
+            "→ Or use `/lrc song - artist`\n"
+            "→ Opens in Poweramp, Musicolet, etc.\n\n"
+            "💬 *Auto-Reply (Business)*\n"
+            "Replies to your Telegram Business DMs when you're away.\n"
+            "→ Connect the bot in Settings → Telegram Business\n"
+            "→ Set your message: `/setaway your text`\n\n"
+            "💎 *Premium*\n"
+            "Unlimited use of all tools. Coming soon.\n\n"
+            "❓ *Need more help?*\n"
+            f"Contact the creator: @{CREATOR}\n\n"
+            f"👑 *Created by:* @{CREATOR}")
+
 @bot.callback_query_handler(func=lambda c: True)
 def handle(c):
     bot.answer_callback_query(c.id)
@@ -87,18 +118,21 @@ def handle(c):
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
         bot.edit_message_text(
             "💬 *Auto-Reply (Business)*\n\n"
-            "To use this:\n"
-            "1. Go to Telegram Settings\n"
-            "2. Telegram Business → Chatbots\n"
-            "3. Add this bot\n"
-            "4. Set your away message here\n\n"
-            "Coming in the next version.",
+            "Set your away message with:\n"
+            "`/setaway your message`\n\n"
+            "When someone DMs your connected Business account, "
+            "the bot replies for you.",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
     elif c.data == "upgrade":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
         bot.edit_message_text("💎 *Premium*\n\nComing soon...",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "help":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text(help_text(), chat_id, msg_id,
+            reply_markup=markup, parse_mode="Markdown")
 
 # ---------- VOICE ----------
 def make_voice_note(chat_id, text):
@@ -143,65 +177,49 @@ def send_lrc(chat_id, query):
     bot.send_document(chat_id, file_bytes,
         caption=f"🎤 {song['trackName']} — {song['artistName']}")
 
-# ---------- BUSINESS CONNECTION HANDLER ----------
+# ---------- BUSINESS CONNECTION ----------
 @bot.business_connection_handler(func=lambda conn: True)
 def on_business_connection(conn):
-    """Fires when a user connects/disconnects their Business account to the bot"""
     try:
-        print(f"Business connection event: {conn}")
-        business_owner[conn.id] = conn.user.id
+        print(f"BUSINESS CONNECTION: id={conn.id} user={conn.user.id} enabled={conn.is_enabled}")
         if conn.is_enabled:
+            business_owner[conn.id] = conn.user.id
             bot.send_message(conn.user.id,
-                "✅ SAVIOUR is now connected to your Telegram Business.\n\n"
-                "Set your away message using /setaway on this bot.")
+                "✅ SAVIOUR connected to your Telegram Business.\n"
+                "Use /setaway to set your auto-reply message.")
+        else:
+            business_owner.pop(conn.id, None)
     except Exception as e:
         print("Business connection error:", e)
 
-# ---------- BUSINESS MESSAGE HANDLER ----------
+# ---------- BUSINESS MESSAGE ----------
 @bot.business_message_handler(func=lambda m: True)
 def on_business_message(m):
-    """Fires when a customer sends a message to your connected Business account"""
     try:
         connection_id = m.business_connection_id
-        # Reply automatically using saved away message
-        away = get_away_message(connection_id)
+        print(f"BUSINESS MESSAGE: from={m.chat.id} text={m.text}")
+        away = AWAY_MESSAGES.get(connection_id)
         if away:
-            bot.send_message(
-                m.chat.id,
-                away,
-                business_connection_id=connection_id
-            )
+            bot.send_message(m.chat.id, away, business_connection_id=connection_id)
+            print("Auto-reply sent.")
     except Exception as e:
         print("Business message error:", e)
 
-# ---------- AWAY MESSAGE STORAGE ----------
-AWAY_MESSAGES = {}
-
-def set_away_message(connection_id, text):
-    AWAY_MESSAGES[connection_id] = text
-
-def get_away_message(connection_id):
-    return AWAY_MESSAGES.get(connection_id)
-
-# ---------- /setaway COMMAND (owner only) ----------
+# ---------- /setaway ----------
 @bot.message_handler(commands=['setaway'])
 def set_away_cmd(m):
     text = m.text.replace('/setaway', '', 1).strip()
     if not text:
-        bot.reply_to(m,
-            "Usage: `/setaway Your message here`\n\n"
-            "Example: `/setaway Hi, I'm currently away. I'll reply soon.`",
-            parse_mode="Markdown")
+        bot.reply_to(m, "Usage: `/setaway Your message here`", parse_mode="Markdown")
         return
-    # Find owner's connection
-    for conn_id, owner_id in business_owner.items():
-        if owner_id == m.from_user.id:
-            set_away_message(conn_id, text)
-            bot.reply_to(m, "✅ Away message set!")
-            return
-    bot.reply_to(m, "⚠️ No business connection found. Connect the bot to your Telegram Business first.")
+    if not business_owner:
+        bot.reply_to(m, "⚠️ No business connection found. Connect the bot to your Telegram Business first.")
+        return
+    for conn_id in business_owner:
+        AWAY_MESSAGES[conn_id] = text
+    bot.reply_to(m, "✅ Away message set!")
 
-# ---------- /say /lrc still work ----------
+# ---------- /say /lrc ----------
 @bot.message_handler(commands=['say'])
 def say_cmd(m):
     text = m.text.replace('/say', '', 1).strip()
