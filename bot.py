@@ -296,6 +296,17 @@ set_webhook()
 
 # ---------- PREMIUM ----------
 def premium_text(uid):
+    # Admin — unlimited, no payment needed
+    if uid == ADMIN_ID:
+        return ("👑 *ADMIN ACCOUNT*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "You are the creator of SAVIOUR.\n\n"
+                "✅ Unlimited voice notes\n"
+                "✅ Unlimited lyrics\n"
+                "✅ Full admin access\n\n"
+                "Thank you for building SAVIOUR! 🚀")
+
+    # Paid users — premium active
     if is_paid(uid):
         return ("💎 *PREMIUM ACTIVE*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -303,6 +314,8 @@ def premium_text(uid):
                 "✅ Unlimited lyrics\n"
                 "✅ Priority speed\n\n"
                 "Thank you for supporting SAVIOUR!")
+
+    # Everyone else — payment page
     return (f"💎 *UPGRADE TO PREMIUM*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             f"💰 Price: *{PRICE}*\n\n"
@@ -318,7 +331,6 @@ def premium_text(uid):
             f"2. Send receipt to @{CREATOR}\n"
             "3. Wait for approval\n\n"
             "⚠️ Free: 3 voice + 3 lyrics per day")
-
 # ---------- MAIN MENU ----------
 def main_menu(chat_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=2)
