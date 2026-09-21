@@ -7,29 +7,218 @@ import requests
 import io
 import json
 import time
+import datetime
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from flask import Flask, request
 
 # ---------- CONFIG ----------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://saviour-bot-014v.onrender.com")
 CREATOR = "IAMSAVIOUR1"
+ADMIN_ID = 8872791323
+
+PRICE = "₦1,500/month"
+PAY_NAME = "CHINAZAEKPERE SAVIOUR MBAEBIE"
+PAY_ACCOUNT = "9038530721"
+PAY_BANK = "Opay"
+
+FREE_VOICE_LIMIT = 3
+FREE_LYRICS_LIMIT = 3
 
 print("=" * 50, flush=True)
 print("STARTUP", flush=True)
-print("BOT_TOKEN loaded:", "YES" if BOT_TOKEN else "NO — MISSING!", flush=True)
+print("BOT_TOKEN:", "YES" if BOT_TOKEN else "MISSING!", flush=True)
+print("DATABASE_URL:", "YES" if DATABASE_URL else "MISSING!", flush=True)
 print("=" * 50, flush=True)
 
 if not BOT_TOKEN:
-    raise SystemExit("BOT_TOKEN is missing.")
+    raise SystemExit("BOT_TOKEN missing")
+if not DATABASE_URL:
+    raise SystemExit("DATABASE_URL missing")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-user_mode = {}
-business_owner = {}
-AWAY_MESSAGES = {}
+# ---------- DATABASE ----------
+def db():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-# ---------- VOICES BY COUNTRY ----------
+def init_db():
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                paid INTEGER DEFAULT 0,
+                banned INTEGER DEFAULT 0,
+                voice_key TEXT DEFAULT 'ng_male',
+                away_message TEXT,
+                voice_count INTEGER DEFAULT 0,
+                lyrics_count INTEGER DEFAULT 0,
+                mode TEXT DEFAULT 'voice',
+                last_reset DATE,
+                joined DATE DEFAULT CURRENT_DATE,
+                last_seen DATE DEFAULT CURRENT_DATE
+            )
+        """)
+        # Add mode column if table already existed without it
+        cur.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'voice'
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("DB init OK", flush=True)
+    except Exception as e:
+        print("DB INIT ERROR:", e, flush=True)
+
+init_db()
+
+def get_user(uid):
+    today = datetime.date.today()
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE user_id=%s", (uid,))
+        row = cur.fetchone()
+        if not row:
+            cur.execute("INSERT INTO users (user_id, last_reset) VALUES (%s, %s)",
+                        (uid, today))
+            conn.commit()
+            cur.execute("SELECT * FROM users WHERE user_id=%s", (uid,))
+            row = cur.fetchone()
+        elif row["last_reset"] != today:
+            cur.execute("""UPDATE users SET voice_count=0, lyrics_count=0,
+                           last_reset=%s, last_seen=%s WHERE user_id=%s""",
+                        (today, today, uid))
+            conn.commit()
+            cur.execute("SELECT * FROM users WHERE user_id=%s", (uid,))
+            row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row
+    except Exception as e:
+        print("get_user error:", e, flush=True)
+        return None
+
+def save_user_meta(uid, username, first_name):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""UPDATE users SET username=%s, first_name=%s, last_seen=%s
+                       WHERE user_id=%s""",
+                    (username, first_name, datetime.date.today(), uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("save_user_meta error:", e, flush=True)
+
+def is_paid(uid):
+    u = get_user(uid)
+    return bool(u and u["paid"] == 1)
+
+def is_banned(uid):
+    u = get_user(uid)
+    return bool(u and u["banned"] == 1)
+
+def can_use(uid, kind):
+    if is_paid(uid):
+        return True
+    u = get_user(uid)
+    if not u:
+        return False
+    if kind == "voice":
+        return u["voice_count"] < FREE_VOICE_LIMIT
+    if kind == "lyrics":
+        return u["lyrics_count"] < FREE_LYRICS_LIMIT
+    return True
+
+def bump(uid, kind):
+    col = "voice_count" if kind == "voice" else "lyrics_count"
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute(f"UPDATE users SET {col}={col}+1 WHERE user_id=%s", (uid,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("bump error:", e, flush=True)
+
+def set_paid(uid, value):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET paid=%s WHERE user_id=%s", (value, uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("set_paid error:", e, flush=True)
+
+def set_banned(uid, value):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET banned=%s WHERE user_id=%s", (value, uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("set_banned error:", e, flush=True)
+
+def set_voice_key(uid, key):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET voice_key=%s WHERE user_id=%s", (key, uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("set_voice_key error:", e, flush=True)
+
+def get_voice_key(uid):
+    u = get_user(uid)
+    return u["voice_key"] if u and u["voice_key"] else "ng_male"
+
+def set_mode(uid, mode):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET mode=%s WHERE user_id=%s", (mode, uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("set_mode error:", e, flush=True)
+
+def get_mode(uid):
+    u = get_user(uid)
+    return u["mode"] if u and u["mode"] else "voice"
+
+def set_away_msg(uid, text):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET away_message=%s WHERE user_id=%s", (text, uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("set_away error:", e, flush=True)
+
+def get_away_msg(uid):
+    u = get_user(uid)
+    return u["away_message"] if u else None
+
+# ---------- VOICES ----------
 COUNTRIES = {
     "ng": {"flag": "🇳🇬", "name": "Nigeria"},
     "us": {"flag": "🇺🇸", "name": "USA"},
@@ -44,55 +233,44 @@ COUNTRIES = {
 }
 
 VOICES = {
-    # Nigeria
     "ng_male":   {"country": "ng", "label": "Abeo (M)",  "voice": "en-NG-AbeoNeural"},
     "ng_female": {"country": "ng", "label": "Ezinne (F)", "voice": "en-NG-EzinneNeural"},
-    # USA
     "us_aria":   {"country": "us", "label": "Aria (F)",   "voice": "en-US-AriaNeural"},
     "us_guy":    {"country": "us", "label": "Guy (M)",    "voice": "en-US-GuyNeural"},
     "us_jenny":  {"country": "us", "label": "Jenny (F)",  "voice": "en-US-JennyNeural"},
     "us_michelle":{"country": "us","label": "Michelle (F)","voice": "en-US-MichelleNeural"},
     "us_eric":   {"country": "us", "label": "Eric (M)",   "voice": "en-US-EricNeural"},
     "us_ana":    {"country": "us", "label": "Ana (F)",    "voice": "en-US-AnaNeural"},
-    # UK
     "uk_sonia":  {"country": "uk", "label": "Sonia (F)",  "voice": "en-GB-SoniaNeural"},
     "uk_ryan":   {"country": "uk", "label": "Ryan (M)",   "voice": "en-GB-RyanNeural"},
     "uk_libby":  {"country": "uk", "label": "Libby (F)",  "voice": "en-GB-LibbyNeural"},
     "uk_thomas": {"country": "uk", "label": "Thomas (M)", "voice": "en-GB-ThomasNeural"},
-    # Australia
     "au_william":{"country": "au", "label": "William (M)","voice": "en-AU-WilliamNeural"},
     "au_natasha":{"country": "au", "label": "Natasha (F)","voice": "en-AU-NatashaNeural"},
-    # India
     "in_neerja": {"country": "in", "label": "Neerja (F)", "voice": "en-IN-NeerjaNeural"},
     "in_prabhat":{"country": "in", "label": "Prabhat (M)","voice": "en-IN-PrabhatNeural"},
     "in_swara":  {"country": "in", "label": "Swara (F)",  "voice": "en-IN-SwaraNeural"},
     "in_madhur": {"country": "in", "label": "Madhur (M)", "voice": "en-IN-MadhurNeural"},
-    # Arabic
     "sa_salma":  {"country": "sa", "label": "Salma (F)",  "voice": "ar-SA-SalmaNeural"},
     "sa_zariyah":{"country": "sa", "label": "Zariyah (F)","voice": "ar-SA-ZariyahNeural"},
     "sa_hamed":  {"country": "sa", "label": "Hamed (M)",  "voice": "ar-SA-HamedNeural"},
-    # French
     "fr_denise": {"country": "fr", "label": "Denise (F)", "voice": "fr-FR-DeniseNeural"},
     "fr_henri":  {"country": "fr", "label": "Henri (M)",  "voice": "fr-FR-HenriNeural"},
     "fr_eloise": {"country": "fr", "label": "Eloise (F)", "voice": "fr-FR-EloiseNeural"},
-    # Spanish
     "es_elvira": {"country": "es", "label": "Elvira (F)", "voice": "es-ES-ElviraNeural"},
     "es_alvaro": {"country": "es", "label": "Alvaro (M)", "voice": "es-ES-AlvaroNeural"},
     "es_lucia":  {"country": "es", "label": "Lucia (F)",  "voice": "es-ES-LuciaNeural"},
-    # South Africa
     "za_leah":   {"country": "za", "label": "Leah (F)",   "voice": "en-ZA-LeahNeural"},
     "za_luke":   {"country": "za", "label": "Luke (M)",   "voice": "en-ZA-LukeNeural"},
-    # Philippines
     "ph_rosa":   {"country": "ph", "label": "Rosa (F)",   "voice": "fil-PH-RosaNeural"},
     "ph_angelo": {"country": "ph", "label": "Angelo (M)", "voice": "fil-PH-AngeloNeural"},
     "ph_blessica":{"country":"ph", "label": "Blessica (F)","voice":"fil-PH-BlessicaNeural"},
 }
 
-DEFAULT_VOICE_KEY = "ng_male"
-user_voice = {}
-
-def get_voice(chat_id):
-    key = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
+def get_voice(uid):
+    key = get_voice_key(uid)
+    if key not in VOICES:
+        key = "ng_male"
     return VOICES[key]["voice"]
 
 # ---------- AUTO SET WEBHOOK ----------
@@ -108,15 +286,39 @@ def set_webhook():
             data={"url": f"{RENDER_URL}/{BOT_TOKEN}", "allowed_updates": allowed},
             timeout=10
         )
-        print("Webhook response:", r.json(), flush=True)
+        print("Webhook:", r.json(), flush=True)
     except Exception as e:
         print("Webhook error:", e, flush=True)
 
 set_webhook()
 
+# ---------- PREMIUM ----------
+def premium_text(uid):
+    if is_paid(uid):
+        return ("💎 *PREMIUM ACTIVE*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "✅ Unlimited voice notes\n"
+                "✅ Unlimited lyrics\n"
+                "✅ Priority speed\n\n"
+                "Thank you for supporting SAVIOUR!")
+    return (f"💎 *UPGRADE TO PREMIUM*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💰 Price: *{PRICE}*\n\n"
+            "🎁 *You get:*\n"
+            "✅ Unlimited voice notes\n"
+            "✅ Unlimited lyrics\n"
+            "✅ Priority speed\n\n"
+            "📋 *How to pay:*\n"
+            f"1. Transfer {PRICE} to:\n"
+            f"   🏦 {PAY_BANK}\n"
+            f"   🔢 {PAY_ACCOUNT}\n"
+            f"   👤 {PAY_NAME}\n\n"
+            f"2. Send receipt to @{CREATOR}\n"
+            "3. Wait for approval\n\n"
+            "⚠️ Free: 3 voice + 3 lyrics per day")
+
 # ---------- MAIN MENU ----------
 def main_menu(chat_id, message_id=None):
-    user_mode[chat_id] = None
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🎙 Voice", callback_data="voice"),
@@ -138,76 +340,58 @@ def main_menu(chat_id, message_id=None):
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    try:
-        main_menu(m.chat.id)
-    except Exception as e:
-        bot.send_message(m.chat.id, f"❌ ERROR: {e}")
-        print("START ERROR:", e, flush=True)
+    if is_banned(m.from_user.id):
+        bot.send_message(m.chat.id, "🚫 You are banned.")
+        return
+    save_user_meta(m.from_user.id, m.from_user.username, m.from_user.first_name)
+    main_menu(m.chat.id)
 
 # ---------- HELP ----------
 def help_text():
     return ("❓ *SAVIOUR — Help Guide*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "🎙 *Voice Tool*\n"
-            "Turn text into a downloadable MP3.\n\n"
-            "*Steps:*\n"
             "1. Tap Voice\n"
             "2. Choose a country\n"
             "3. Pick a voice\n"
-            "4. Type your message\n"
-            "5. Get a downloadable MP3\n\n"
-            "*Limits:*\n"
-            "• Max length: ~10 minutes of speech\n"
-            "• Free users: limited daily generations\n"
-            "• Premium users: unlimited\n\n"
+            "4. Type your message → MP3\n\n"
             "📝 *Lyrics Tool*\n"
-            "Get a synced .lrc file for any song.\n\n"
-            "*Steps:*\n"
             "1. Tap Lyrics\n"
             "2. Type: song name - artist\n"
             "3. Get a synced .lrc file\n\n"
-            "*Limits:*\n"
-            "• Free users: limited daily requests\n"
-            "• Premium users: unlimited\n\n"
             "💬 *Auto-Reply*\n"
-            "Replies to your Telegram Business DMs.\n\n"
-            "*Steps:*\n"
-            "1. Connect SAVIOUR to your Telegram Business\n"
-            "2. Set message: /setaway your text\n"
-            "3. Bot replies while you're away\n\n"
-            "*Limits:*\n"
-            "• Telegram Business DMs only\n\n"
+            "Set with: /setaway your message\n\n"
             "💎 *Premium*\n"
-            "Unlimited use of all tools.\n\n"
+            f"Unlock unlimited — {PRICE}\n\n"
+            "*Free Limits:*\n"
+            f"🎙 Voice: {FREE_VOICE_LIMIT}/day\n"
+            f"📝 Lyrics: {FREE_LYRICS_LIMIT}/day\n\n"
             f"👑 Created by: @{CREATOR}")
 
-# ---------- VOICE: COUNTRY PICKER (GRID) ----------
-def voice_countries_page(chat_id, message_id=None):
+# ---------- VOICE PAGES ----------
+def voice_countries_page(chat_id, uid, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=3)
-
-    buttons = []
+    btns = []
     for ckey, cinfo in COUNTRIES.items():
         count = sum(1 for v in VOICES.values() if v["country"] == ckey)
         if count > 0:
-            buttons.append(types.InlineKeyboardButton(
+            btns.append(types.InlineKeyboardButton(
                 f"{cinfo['flag']} {cinfo['name']}",
-                callback_data=f"vc_{ckey}"
-            ))
-
-    # Arrange 3 per row
-    for i in range(0, len(buttons), 3):
-        markup.row(*buttons[i:i+3])
-
+                callback_data=f"vc_{ckey}"))
+    for i in range(0, len(btns), 3):
+        markup.row(*btns[i:i+3])
     markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
 
-    current = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
-    current_name = VOICES[current]["label"]
-    current_country = COUNTRIES[VOICES[current]["country"]]
+    current = get_voice_key(uid)
+    if current not in VOICES:
+        current = "ng_male"
+    cur_name = VOICES[current]["label"]
+    cur_country = COUNTRIES[VOICES[current]["country"]]
 
     text = ("🎙 *Voice Tool*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Choose a country to see its voices.\n\n"
-            f"Current voice: {current_country['flag']} *{current_name}*")
+            "Choose a country.\n\n"
+            f"Current: {cur_country['flag']} *{cur_name}*")
 
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
@@ -215,29 +399,21 @@ def voice_countries_page(chat_id, message_id=None):
     else:
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
-# ---------- VOICE: VOICES FOR A COUNTRY (GRID) ----------
-def voice_list_page(chat_id, country_key, message_id=None):
-    current = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
+def voice_list_page(chat_id, uid, country_key, message_id=None):
+    current = get_voice_key(uid)
     markup = types.InlineKeyboardMarkup(row_width=2)
-
-    voice_buttons = []
+    btns = []
     for key, info in VOICES.items():
         if info["country"] == country_key:
             label = f"✅ {info['label']}" if key == current else info['label']
-            voice_buttons.append(
-                types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}")
-            )
-
-    # 2 per row
-    for i in range(0, len(voice_buttons), 2):
-        markup.row(*voice_buttons[i:i+2])
-
+            btns.append(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
+    for i in range(0, len(btns), 2):
+        markup.row(*btns[i:i+2])
     markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="voice"))
 
-    country = COUNTRIES[country_key]
-    text = (f"🎙 *{country['flag']} {country['name']} Voices*\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Tap one to select it.")
+    c = COUNTRIES[country_key]
+    text = (f"🎙 *{c['flag']} {c['name']} Voices*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\nTap one.")
 
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
@@ -249,39 +425,47 @@ def voice_list_page(chat_id, country_key, message_id=None):
 @bot.callback_query_handler(func=lambda c: True)
 def handle(c):
     bot.answer_callback_query(c.id)
+    uid = c.from_user.id
     chat_id = c.message.chat.id
     msg_id = c.message.message_id
+
+    if is_banned(uid):
+        return
 
     if c.data == "menu":
         main_menu(chat_id, msg_id)
     elif c.data == "voice":
-        user_mode[chat_id] = "voice"
-        voice_countries_page(chat_id, msg_id)
+        set_mode(uid, "voice")
+        voice_countries_page(chat_id, uid, msg_id)
     elif c.data.startswith("vc_"):
-        country_key = c.data.replace("vc_", "")
-        if country_key in COUNTRIES:
-            voice_list_page(chat_id, country_key, msg_id)
+        ck = c.data.replace("vc_", "")
+        if ck in COUNTRIES:
+            voice_list_page(chat_id, uid, ck, msg_id)
     elif c.data.startswith("setvoice_"):
         key = c.data.replace("setvoice_", "")
         if key in VOICES:
-            user_voice[chat_id] = key
-            voice_list_page(chat_id, VOICES[key]["country"], msg_id)
+            set_voice_key(uid, key)
+            voice_list_page(chat_id, uid, VOICES[key]["country"], msg_id)
     elif c.data == "lyrics":
-        user_mode[chat_id] = "lyrics"
+        set_mode(uid, "lyrics")
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text("📝 *Lyrics Mode ON*\n\nType: song - artist",
+        bot.edit_message_text(
+            "📝 *Lyrics Mode ON*\n\n"
+            "Type: song name - artist\n"
+            "Example: Shape of You - Ed Sheeran",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
     elif c.data == "reply":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text("💬 *Auto-Reply (Business)*\n\nSet with: /setaway your message",
+        bot.edit_message_text(
+            "💬 *Auto-Reply (Business)*\n\nSet with: /setaway your message",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
     elif c.data == "upgrade":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text("💎 *Premium*\n\nComing soon...",
-            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text(premium_text(uid), chat_id, msg_id,
+            reply_markup=markup, parse_mode="Markdown")
     elif c.data == "help":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
@@ -289,8 +473,15 @@ def handle(c):
             reply_markup=markup, parse_mode="Markdown")
 
 # ---------- VOICE ----------
-def make_voice_note(chat_id, text):
-    voice = get_voice(chat_id)
+def make_voice_note(uid, chat_id, text):
+    if not can_use(uid, "voice"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_VOICE_LIMIT} voice notes/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+    voice = get_voice(uid)
     bot.send_message(chat_id, "🎙 Generating voice...")
 
     async def _make():
@@ -299,21 +490,28 @@ def make_voice_note(chat_id, text):
 
     try:
         asyncio.run(_make())
-
         filename = f"voice_{int(time.time())}.mp3"
         with open("voice.mp3", "rb") as f:
             bot.send_document(chat_id, f,
                 visible_file_name=filename,
-                caption="🎙 Voice note — tap to play, long-press to save")
-
+                caption="🎙 Tap to play, long-press to save")
+        bump(uid, "voice")
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Error: {e}")
 
 # ---------- LYRICS ----------
-def send_lrc(chat_id, query):
+def send_lrc(uid, chat_id, query):
+    if not can_use(uid, "lyrics"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_LYRICS_LIMIT} lyrics/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
     bot.send_message(chat_id, "🔎 Searching lyrics...")
     try:
-        r = requests.get("https://lrclib.net/api/search", params={"q": query}, timeout=15)
+        r = requests.get("https://lrclib.net/api/search",
+                         params={"q": query}, timeout=15)
         data = r.json()
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Search error: {e}")
@@ -338,97 +536,4 @@ def send_lrc(chat_id, query):
     file_bytes.name = filename
     bot.send_document(chat_id, file_bytes,
         caption=f"🎤 {song['trackName']} — {song['artistName']}")
-
-# ---------- BUSINESS ----------
-@bot.business_connection_handler(func=lambda conn: True)
-def on_business_connection(conn):
-    try:
-        print(f"BUSINESS CONNECTION: id={conn.id} enabled={conn.is_enabled}", flush=True)
-        if conn.is_enabled:
-            business_owner[conn.id] = conn.user.id
-            bot.send_message(conn.user.id,
-                "✅ SAVIOUR connected to your Telegram Business.\n"
-                "Use /setaway to set your auto-reply message.")
-        else:
-            business_owner.pop(conn.id, None)
-    except Exception as e:
-        print("Business connection error:", e, flush=True)
-
-@bot.business_message_handler(func=lambda m: True)
-def on_business_message(m):
-    try:
-        connection_id = m.business_connection_id
-        print(f"BUSINESS MESSAGE: from={m.chat.id}", flush=True)
-        away = AWAY_MESSAGES.get(connection_id)
-        if away:
-            bot.send_message(m.chat.id, away, business_connection_id=connection_id)
-            print("Auto-reply sent.", flush=True)
-    except Exception as e:
-        print("Business message error:", e, flush=True)
-
-# ---------- /setaway ----------
-@bot.message_handler(commands=['setaway'])
-def set_away_cmd(m):
-    text = m.text.replace('/setaway', '', 1).strip()
-    if not text:
-        bot.reply_to(m, "Usage: /setaway Your message here")
-        return
-    if not business_owner:
-        bot.reply_to(m, "⚠️ No business connection found.")
-        return
-    for conn_id in business_owner:
-        AWAY_MESSAGES[conn_id] = text
-    bot.reply_to(m, "✅ Away message set!")
-
-# ---------- /voices ----------
-@bot.message_handler(commands=['voices'])
-def voices_cmd(m):
-    voice_countries_page(m.chat.id)
-
-# ---------- /say /lrc ----------
-@bot.message_handler(commands=['say'])
-def say_cmd(m):
-    text = m.text.replace('/say', '', 1).strip()
-    if text:
-        make_voice_note(m.chat.id, text)
-
-@bot.message_handler(commands=['lrc'])
-def lrc_cmd(m):
-    q = m.text.replace('/lrc', '', 1).strip()
-    if q:
-        send_lrc(m.chat.id, q)
-
-# ---------- MAIN HANDLER ----------
-@bot.message_handler(func=lambda m: True)
-def handle_message(m):
-    chat_id = m.chat.id
-    text = (m.text or "").strip()
-    if not text:
-        return
-    mode = user_mode.get(chat_id)
-    if mode == "voice":
-        make_voice_note(chat_id, text)
-        return
-    if mode == "lyrics":
-        send_lrc(chat_id, text)
-        return
-    bot.reply_to(m, "Tap /start to choose a tool.")
-
-# ---------- WEBHOOK ----------
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    print("WEBHOOK HIT", flush=True)
-    try:
-        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-        bot.process_new_updates([update])
-    except Exception as e:
-        print("Webhook processing error:", e, flush=True)
-    return "ok", 200
-
-@app.route("/")
-def index():
-    return "SAVIOUR is running", 200
-
-if __name__ == "__main__":
-    print("Starting Flask app...", flush=True)
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+  
