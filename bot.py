@@ -536,4 +536,213 @@ def send_lrc(uid, chat_id, query):
     file_bytes.name = filename
     bot.send_document(chat_id, file_bytes,
         caption=f"🎤 {song['trackName']} — {song['artistName']}")
-  
+      bump(uid, "lyrics")
+
+# ---------- BUSINESS ----------
+BUSINESS_OWNERS = {}
+
+@bot.business_connection_handler(func=lambda conn: True)
+def on_business_connection(conn):
+    try:
+        print(f"BUSINESS: id={conn.id} enabled={conn.is_enabled}", flush=True)
+        if conn.is_enabled:
+            BUSINESS_OWNERS[conn.id] = conn.user.id
+            bot.send_message(conn.user.id,
+                "✅ SAVIOUR connected to your Telegram Business.\n"
+                "Use /setaway to set your auto-reply.")
+        else:
+            BUSINESS_OWNERS.pop(conn.id, None)
+    except Exception as e:
+        print("Business conn error:", e, flush=True)
+
+@bot.business_message_handler(func=lambda m: True)
+def on_business_message(m):
+    try:
+        for owner_uid in list(BUSINESS_OWNERS.values()):
+            away = get_away_msg(owner_uid)
+            if away:
+                bot.send_message(m.chat.id, away,
+                    business_connection_id=m.business_connection_id)
+                print("Auto-reply sent", flush=True)
+                return
+    except Exception as e:
+        print("Business msg error:", e, flush=True)
+
+# ---------- /setaway ----------
+@bot.message_handler(commands=['setaway'])
+def set_away_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = m.text.replace('/setaway', '', 1).strip()
+    if not text:
+        bot.reply_to(m, "Usage: /setaway Your message here")
+        return
+    set_away_msg(uid, text)
+    bot.reply_to(m, "✅ Away message set!")
+
+# ---------- ADMIN ----------
+def admin_only(m):
+    return m.from_user.id == ADMIN_ID
+
+@bot.message_handler(commands=['addpaid'])
+def addpaid_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_paid(uid, 1)
+        bot.reply_to(m, f"✅ {uid} is now Premium")
+        try:
+            bot.send_message(uid, "🎉 You are now Premium! Unlimited access unlocked.")
+        except:
+            pass
+    except:
+        bot.reply_to(m, "Usage: /addpaid user_id")
+
+@bot.message_handler(commands=['removepaid'])
+def removepaid_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_paid(uid, 0)
+        bot.reply_to(m, f"👤 {uid} removed from Premium")
+    except:
+        bot.reply_to(m, "Usage: /removepaid user_id")
+
+@bot.message_handler(commands=['ban'])
+def ban_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_banned(uid, 1)
+        bot.reply_to(m, f"🚫 {uid} banned")
+    except:
+        bot.reply_to(m, "Usage: /ban user_id")
+
+@bot.message_handler(commands=['unban'])
+def unban_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_banned(uid, 0)
+        bot.reply_to(m, f"✅ {uid} unbanned")
+    except:
+        bot.reply_to(m, "Usage: /unban user_id")
+
+@bot.message_handler(commands=['users'])
+def users_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT user_id, username, paid, banned
+                       FROM users ORDER BY last_seen DESC LIMIT 20""")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        out = "👥 *Recent Users:*\n\n"
+        for r in rows:
+            tag = "💎" if r["paid"] else "👤"
+            bn = "🚫" if r["banned"] else ""
+            out += f"{tag}{bn} `{r['user_id']}` @{r['username'] or '—'}\n"
+        bot.reply_to(m, out, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+@bot.message_handler(commands=['stats'])
+def stats_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) as total FROM users")
+        total = cur.fetchone()["total"]
+        cur.execute("SELECT COUNT(*) as p FROM users WHERE paid=1")
+        paid = cur.fetchone()["p"]
+        cur.execute("SELECT COUNT(*) as b FROM users WHERE banned=1")
+        banned = cur.fetchone()["b"]
+        cur.close()
+        conn.close()
+        bot.reply_to(m,
+            f"📊 *Stats*\n\n"
+            f"👥 Users: {total}\n"
+            f"💎 Paid: {paid}\n"
+            f"🚫 Banned: {banned}",
+            parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+@bot.message_handler(commands=['admin'])
+def admin_cmd(m):
+    if not admin_only(m):
+        return
+    bot.reply_to(m,
+        "🛡️ *ADMIN PANEL*\n\n"
+        "/users — recent users\n"
+        "/stats — overview\n"
+        "/addpaid <id> — unlock\n"
+        "/removepaid <id> — lock\n"
+        "/ban <id> — ban\n"
+        "/unban <id> — unban",
+        parse_mode="Markdown")
+
+# ---------- /say /lrc ----------
+@bot.message_handler(commands=['say'])
+def say_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = m.text.replace('/say', '', 1).strip()
+    if text:
+        make_voice_note(uid, m.chat.id, text)
+
+@bot.message_handler(commands=['lrc'])
+def lrc_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    q = m.text.replace('/lrc', '', 1).strip()
+    if q:
+        send_lrc(uid, m.chat.id, q)
+
+# ---------- MAIN HANDLER ----------
+@bot.message_handler(func=lambda m: True)
+def handle_message(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = (m.text or "").strip()
+    if not text:
+        return
+
+    save_user_meta(uid, m.from_user.username, m.from_user.first_name)
+
+    mode = get_mode(uid)
+    if mode == "lyrics":
+        send_lrc(uid, m.chat.id, text)
+    else:
+        make_voice_note(uid, m.chat.id, text)
+
+# ---------- WEBHOOK ----------
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    try:
+        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+        bot.process_new_updates([update])
+    except Exception as e:
+        print("Webhook error:", e, flush=True)
+    return "ok", 200
+
+@app.route("/")
+def index():
+    return "SAVIOUR is running", 200
+
+if __name__ == "__main__":
+    print("Starting...", flush=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
