@@ -39,7 +39,7 @@ COUNTRIES = {
     "sa": {"flag": "🇸🇦", "name": "Arabic"},
     "fr": {"flag": "🇫🇷", "name": "French"},
     "es": {"flag": "🇪🇸", "name": "Spanish"},
-    "za": {"flag": "🇿🇦", "name": "South Africa"},
+    "za": {"flag": "🇿🇦", "name": "S. Africa"},
     "ph": {"flag": "🇵🇭", "name": "Philippines"},
 }
 
@@ -152,7 +152,7 @@ def help_text():
             "Turn text into a downloadable MP3.\n\n"
             "*Steps:*\n"
             "1. Tap Voice\n"
-            "2. Choose a country flag\n"
+            "2. Choose a country\n"
             "3. Pick a voice\n"
             "4. Type your message\n"
             "5. Get a downloadable MP3\n\n"
@@ -181,17 +181,24 @@ def help_text():
             "Unlimited use of all tools.\n\n"
             f"👑 Created by: @{CREATOR}")
 
-# ---------- VOICE: COUNTRY PICKER ----------
+# ---------- VOICE: COUNTRY PICKER (GRID) ----------
 def voice_countries_page(chat_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=3)
+
+    buttons = []
     for ckey, cinfo in COUNTRIES.items():
         count = sum(1 for v in VOICES.values() if v["country"] == ckey)
         if count > 0:
-            markup.add(types.InlineKeyboardButton(
+            buttons.append(types.InlineKeyboardButton(
                 f"{cinfo['flag']} {cinfo['name']}",
                 callback_data=f"vc_{ckey}"
             ))
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+
+    # Arrange 3 per row
+    for i in range(0, len(buttons), 3):
+        markup.row(*buttons[i:i+3])
+
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
 
     current = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
     current_name = VOICES[current]["label"]
@@ -208,17 +215,24 @@ def voice_countries_page(chat_id, message_id=None):
     else:
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
-# ---------- VOICE: VOICES FOR A COUNTRY ----------
+# ---------- VOICE: VOICES FOR A COUNTRY (GRID) ----------
 def voice_list_page(chat_id, country_key, message_id=None):
-    markup = types.InlineKeyboardMarkup(row_width=2)
     current = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
+    markup = types.InlineKeyboardMarkup(row_width=2)
 
+    voice_buttons = []
     for key, info in VOICES.items():
         if info["country"] == country_key:
             label = f"✅ {info['label']}" if key == current else info['label']
-            markup.add(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
+            voice_buttons.append(
+                types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}")
+            )
 
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="voice"))
+    # 2 per row
+    for i in range(0, len(voice_buttons), 2):
+        markup.row(*voice_buttons[i:i+2])
+
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="voice"))
 
     country = COUNTRIES[country_key]
     text = (f"🎙 *{country['flag']} {country['name']} Voices*\n"
