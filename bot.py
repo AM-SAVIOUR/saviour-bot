@@ -8,16 +8,27 @@ import io
 import json
 from flask import Flask, request
 
+# ---------- CONFIG ----------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://saviour-bot-014v.onrender.com")
 CREATOR = "I_AM_SAVIOUR_1"
 
+print("=" * 50)
+print("STARTUP")
+print("BOT_TOKEN loaded:", "YES" if BOT_TOKEN else "NO — MISSING!")
+print("RENDER_URL:", RENDER_URL)
+print("=" * 50)
+
+if not BOT_TOKEN:
+    raise SystemExit("BOT_TOKEN is missing. Set it in Render → Environment.")
+
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
+# ---------- GLOBAL STATE ----------
 user_mode = {}
 business_owner = {}
-AWAY_MESSAGES = {}
+AWAY_MESSAGES = {}   # <-- moved to top (Bug 3 fixed)
 
 # ---------- AUTO SET WEBHOOK ----------
 def set_webhook():
@@ -30,15 +41,14 @@ def set_webhook():
             "edited_business_message",
             "deleted_business_messages"
         ])
+        url = f"{RENDER_URL}/{BOT_TOKEN}"
+        print("Setting webhook to:", url[:60] + "...")
         r = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
-            data={
-                "url": f"{RENDER_URL}/{BOT_TOKEN}",
-                "allowed_updates": allowed
-            },
+            data={"url": url, "allowed_updates": allowed},
             timeout=10
         )
-        print("Webhook set:", r.json())
+        print("Webhook response:", r.json())
     except Exception as e:
         print("Webhook error:", e)
 
@@ -70,27 +80,23 @@ def main_menu(chat_id, message_id=None):
 def start(m):
     main_menu(m.chat.id)
 
-# ---------- HELP PAGE ----------
+# ---------- HELP ----------
 def help_text():
     return ("❓ *SAVIOUR — Help Guide*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "🎙 *Voice Tool*\n"
-            "Turn any text into a voice note.\n"
+            "Turn text into a voice note.\n"
             "→ Tap Voice, then type your message\n"
             "→ Or use `/say your text`\n\n"
             "📝 *Lyrics Tool*\n"
             "Get a synced `.lrc` file for any song.\n"
             "→ Tap Lyrics, then type: song - artist\n"
-            "→ Or use `/lrc song - artist`\n"
-            "→ Opens in Poweramp, Musicolet, etc.\n\n"
+            "→ Or use `/lrc song - artist`\n\n"
             "💬 *Auto-Reply (Business)*\n"
-            "Replies to your Telegram Business DMs when you're away.\n"
-            "→ Connect the bot in Settings → Telegram Business\n"
-            "→ Set your message: `/setaway your text`\n\n"
+            "Replies to your Telegram Business DMs.\n"
+            "→ Set message: `/setaway your text`\n\n"
             "💎 *Premium*\n"
-            "Unlimited use of all tools. Coming soon.\n\n"
-            "❓ *Need more help?*\n"
-            f"Contact the creator: @{CREATOR}\n\n"
+            "Unlimited use of all tools.\n\n"
             f"👑 *Created by:* @{CREATOR}")
 
 @bot.callback_query_handler(func=lambda c: True)
@@ -119,9 +125,7 @@ def handle(c):
         bot.edit_message_text(
             "💬 *Auto-Reply (Business)*\n\n"
             "Set your away message with:\n"
-            "`/setaway your message`\n\n"
-            "When someone DMs your connected Business account, "
-            "the bot replies for you.",
+            "`/setaway your message`",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
     elif c.data == "upgrade":
         markup = types.InlineKeyboardMarkup()
@@ -177,7 +181,7 @@ def send_lrc(chat_id, query):
     bot.send_document(chat_id, file_bytes,
         caption=f"🎤 {song['trackName']} — {song['artistName']}")
 
-# ---------- BUSINESS CONNECTION ----------
+# ---------- BUSINESS ----------
 @bot.business_connection_handler(func=lambda conn: True)
 def on_business_connection(conn):
     try:
@@ -192,7 +196,6 @@ def on_business_connection(conn):
     except Exception as e:
         print("Business connection error:", e)
 
-# ---------- BUSINESS MESSAGE ----------
 @bot.business_message_handler(func=lambda m: True)
 def on_business_message(m):
     try:
@@ -213,7 +216,7 @@ def set_away_cmd(m):
         bot.reply_to(m, "Usage: `/setaway Your message here`", parse_mode="Markdown")
         return
     if not business_owner:
-        bot.reply_to(m, "⚠️ No business connection found. Connect the bot to your Telegram Business first.")
+        bot.reply_to(m, "⚠️ No business connection found.")
         return
     for conn_id in business_owner:
         AWAY_MESSAGES[conn_id] = text
@@ -248,16 +251,27 @@ def handle_message(m):
         return
     bot.reply_to(m, "Tap /start to choose a tool.")
 
-# ---------- WEBHOOK ----------
+# ---------- WEBHOOK ROUTE ----------
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
+    print("WEBHOOK HIT — update received")
+    try:
+        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+        bot.process_new_updates([update])
+    except Exception as e:
+        print("Webhook processing error:", e)
     return "ok", 200
+
+# ---------- CATCH-ALL (debug) ----------
+@app.route("/<path:path>", methods=["POST"])
+def catch_all(path):
+    print(f"POST to wrong path: /{path[:20]}...")
+    return "wrong path", 404
 
 @app.route("/")
 def index():
     return "SAVIOUR is running", 200
 
 if __name__ == "__main__":
+    print("Starting Flask app...")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
