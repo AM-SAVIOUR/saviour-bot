@@ -104,7 +104,7 @@ def help_text():
     return ("❓ *SAVIOUR — Help Guide*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "🎙 *Voice Tool*\n"
-            "Turn text into a voice note + MP3.\n"
+            "Turn text into a downloadable MP3.\n"
             "→ Tap Voice, pick a voice\n"
             "→ Type your message\n"
             "→ Or use /say your text\n\n"
@@ -131,7 +131,7 @@ def voice_page(chat_id, message_id=None):
     text = ("🎙 *Voice Tool*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "Pick a voice below.\n"
-            "Then type your message — you'll get a voice note + MP3.\n\n"
+            "Then type your message — you'll get a downloadable MP3.\n\n"
             f"Current voice: *{VOICES[current]['name']}*")
 
     if message_id:
@@ -191,16 +191,12 @@ def make_voice_note(chat_id, text):
     try:
         asyncio.run(_make())
 
-        # Send as voice note
-        with open("voice.mp3", "rb") as f:
-            bot.send_voice(chat_id, f)
-
-        # Send as downloadable MP3
+        # Send as single downloadable MP3 file
         filename = f"voice_{int(time.time())}.mp3"
         with open("voice.mp3", "rb") as f:
             bot.send_document(chat_id, f,
                 visible_file_name=filename,
-                caption="📥 Save this MP3")
+                caption="🎙 Voice note — tap to play, long-press to save")
 
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Error: {e}")
