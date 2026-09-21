@@ -29,18 +29,63 @@ user_mode = {}
 business_owner = {}
 AWAY_MESSAGES = {}
 
-# ---------- VOICES ----------
+# ---------- VOICES BY COUNTRY ----------
+COUNTRIES = {
+    "ng": {"flag": "🇳🇬", "name": "Nigeria"},
+    "us": {"flag": "🇺🇸", "name": "USA"},
+    "uk": {"flag": "🇬🇧", "name": "UK"},
+    "au": {"flag": "🇦🇺", "name": "Australia"},
+    "in": {"flag": "🇮🇳", "name": "India"},
+    "sa": {"flag": "🇸🇦", "name": "Arabic"},
+    "fr": {"flag": "🇫🇷", "name": "French"},
+    "es": {"flag": "🇪🇸", "name": "Spanish"},
+    "za": {"flag": "🇿🇦", "name": "South Africa"},
+    "ph": {"flag": "🇵🇭", "name": "Philippines"},
+}
+
 VOICES = {
-    "ng_male":   {"name": "🇳🇬 Abeo (Nigerian male)",   "voice": "en-NG-AbeoNeural"},
-    "ng_female": {"name": "🇳🇬 Ezinne (Nigerian female)", "voice": "en-NG-EzinneNeural"},
-    "us_female": {"name": "🇺🇸 Aria (US female)",       "voice": "en-US-AriaNeural"},
-    "us_male":   {"name": "🇺🇸 Guy (US male)",          "voice": "en-US-GuyNeural"},
-    "uk_female": {"name": "🇬🇧 Sonia (UK female)",      "voice": "en-GB-SoniaNeural"},
-    "uk_male":   {"name": "🇬🇧 Ryan (UK male)",         "voice": "en-GB-RyanNeural"},
-    "in_female": {"name": "🇮🇳 Neerja (Indian female)", "voice": "en-IN-NeerjaNeural"},
-    "in_male":   {"name": "🇮🇳 Prabhat (Indian male)",  "voice": "en-IN-PrabhatNeural"},
-    "au_male":   {"name": "🇦🇺 William (Australian male)", "voice": "en-AU-WilliamNeural"},
-    "au_female": {"name": "🇦🇺 Natasha (Australian female)", "voice": "en-AU-NatashaNeural"},
+    # Nigeria
+    "ng_male":   {"country": "ng", "label": "Abeo (M)",  "voice": "en-NG-AbeoNeural"},
+    "ng_female": {"country": "ng", "label": "Ezinne (F)", "voice": "en-NG-EzinneNeural"},
+    # USA
+    "us_aria":   {"country": "us", "label": "Aria (F)",   "voice": "en-US-AriaNeural"},
+    "us_guy":    {"country": "us", "label": "Guy (M)",    "voice": "en-US-GuyNeural"},
+    "us_jenny":  {"country": "us", "label": "Jenny (F)",  "voice": "en-US-JennyNeural"},
+    "us_michelle":{"country": "us","label": "Michelle (F)","voice": "en-US-MichelleNeural"},
+    "us_eric":   {"country": "us", "label": "Eric (M)",   "voice": "en-US-EricNeural"},
+    "us_ana":    {"country": "us", "label": "Ana (F)",    "voice": "en-US-AnaNeural"},
+    # UK
+    "uk_sonia":  {"country": "uk", "label": "Sonia (F)",  "voice": "en-GB-SoniaNeural"},
+    "uk_ryan":   {"country": "uk", "label": "Ryan (M)",   "voice": "en-GB-RyanNeural"},
+    "uk_libby":  {"country": "uk", "label": "Libby (F)",  "voice": "en-GB-LibbyNeural"},
+    "uk_thomas": {"country": "uk", "label": "Thomas (M)", "voice": "en-GB-ThomasNeural"},
+    # Australia
+    "au_william":{"country": "au", "label": "William (M)","voice": "en-AU-WilliamNeural"},
+    "au_natasha":{"country": "au", "label": "Natasha (F)","voice": "en-AU-NatashaNeural"},
+    # India
+    "in_neerja": {"country": "in", "label": "Neerja (F)", "voice": "en-IN-NeerjaNeural"},
+    "in_prabhat":{"country": "in", "label": "Prabhat (M)","voice": "en-IN-PrabhatNeural"},
+    "in_swara":  {"country": "in", "label": "Swara (F)",  "voice": "en-IN-SwaraNeural"},
+    "in_madhur": {"country": "in", "label": "Madhur (M)", "voice": "en-IN-MadhurNeural"},
+    # Arabic
+    "sa_salma":  {"country": "sa", "label": "Salma (F)",  "voice": "ar-SA-SalmaNeural"},
+    "sa_zariyah":{"country": "sa", "label": "Zariyah (F)","voice": "ar-SA-ZariyahNeural"},
+    "sa_hamed":  {"country": "sa", "label": "Hamed (M)",  "voice": "ar-SA-HamedNeural"},
+    # French
+    "fr_denise": {"country": "fr", "label": "Denise (F)", "voice": "fr-FR-DeniseNeural"},
+    "fr_henri":  {"country": "fr", "label": "Henri (M)",  "voice": "fr-FR-HenriNeural"},
+    "fr_eloise": {"country": "fr", "label": "Eloise (F)", "voice": "fr-FR-EloiseNeural"},
+    # Spanish
+    "es_elvira": {"country": "es", "label": "Elvira (F)", "voice": "es-ES-ElviraNeural"},
+    "es_alvaro": {"country": "es", "label": "Alvaro (M)", "voice": "es-ES-AlvaroNeural"},
+    "es_lucia":  {"country": "es", "label": "Lucia (F)",  "voice": "es-ES-LuciaNeural"},
+    # South Africa
+    "za_leah":   {"country": "za", "label": "Leah (F)",   "voice": "en-ZA-LeahNeural"},
+    "za_luke":   {"country": "za", "label": "Luke (M)",   "voice": "en-ZA-LukeNeural"},
+    # Philippines
+    "ph_rosa":   {"country": "ph", "label": "Rosa (F)",   "voice": "fil-PH-RosaNeural"},
+    "ph_angelo": {"country": "ph", "label": "Angelo (M)", "voice": "fil-PH-AngeloNeural"},
+    "ph_blessica":{"country":"ph", "label": "Blessica (F)","voice":"fil-PH-BlessicaNeural"},
 }
 
 DEFAULT_VOICE_KEY = "ng_male"
@@ -104,35 +149,81 @@ def help_text():
     return ("❓ *SAVIOUR — Help Guide*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "🎙 *Voice Tool*\n"
-            "Turn text into a downloadable MP3.\n"
-            "→ Tap Voice, pick a voice\n"
-            "→ Type your message\n"
-            "→ Or use /say your text\n\n"
+            "Turn text into a downloadable MP3.\n\n"
+            "*Steps:*\n"
+            "1. Tap Voice\n"
+            "2. Choose a country flag\n"
+            "3. Pick a voice\n"
+            "4. Type your message\n"
+            "5. Get a downloadable MP3\n\n"
+            "*Limits:*\n"
+            "• Max length: ~10 minutes of speech\n"
+            "• Free users: limited daily generations\n"
+            "• Premium users: unlimited\n\n"
             "📝 *Lyrics Tool*\n"
-            "Get a synced .lrc file for any song.\n"
-            "→ Tap Lyrics, then type: song - artist\n"
-            "→ Or use /lrc song - artist\n\n"
-            "💬 *Auto-Reply (Business)*\n"
-            "Replies to your Telegram Business DMs.\n"
-            "→ Set message: /setaway your text\n\n"
+            "Get a synced .lrc file for any song.\n\n"
+            "*Steps:*\n"
+            "1. Tap Lyrics\n"
+            "2. Type: song name - artist\n"
+            "3. Get a synced .lrc file\n\n"
+            "*Limits:*\n"
+            "• Free users: limited daily requests\n"
+            "• Premium users: unlimited\n\n"
+            "💬 *Auto-Reply*\n"
+            "Replies to your Telegram Business DMs.\n\n"
+            "*Steps:*\n"
+            "1. Connect SAVIOUR to your Telegram Business\n"
+            "2. Set message: /setaway your text\n"
+            "3. Bot replies while you're away\n\n"
+            "*Limits:*\n"
+            "• Telegram Business DMs only\n\n"
             "💎 *Premium*\n"
             "Unlimited use of all tools.\n\n"
             f"👑 Created by: @{CREATOR}")
 
-# ---------- VOICE PAGE ----------
-def voice_page(chat_id, message_id=None):
-    current = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for key, info in VOICES.items():
-        label = f"✅ {info['name']}" if key == current else info['name']
-        markup.add(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
+# ---------- VOICE: COUNTRY PICKER ----------
+def voice_countries_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    for ckey, cinfo in COUNTRIES.items():
+        count = sum(1 for v in VOICES.values() if v["country"] == ckey)
+        if count > 0:
+            markup.add(types.InlineKeyboardButton(
+                f"{cinfo['flag']} {cinfo['name']}",
+                callback_data=f"vc_{ckey}"
+            ))
     markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+
+    current = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
+    current_name = VOICES[current]["label"]
+    current_country = COUNTRIES[VOICES[current]["country"]]
 
     text = ("🎙 *Voice Tool*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Pick a voice below.\n"
-            "Then type your message — you'll get a downloadable MP3.\n\n"
-            f"Current voice: *{VOICES[current]['name']}*")
+            "Choose a country to see its voices.\n\n"
+            f"Current voice: {current_country['flag']} *{current_name}*")
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- VOICE: VOICES FOR A COUNTRY ----------
+def voice_list_page(chat_id, country_key, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    current = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
+
+    for key, info in VOICES.items():
+        if info["country"] == country_key:
+            label = f"✅ {info['label']}" if key == current else info['label']
+            markup.add(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
+
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="voice"))
+
+    country = COUNTRIES[country_key]
+    text = (f"🎙 *{country['flag']} {country['name']} Voices*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Tap one to select it.")
 
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
@@ -151,12 +242,16 @@ def handle(c):
         main_menu(chat_id, msg_id)
     elif c.data == "voice":
         user_mode[chat_id] = "voice"
-        voice_page(chat_id, msg_id)
+        voice_countries_page(chat_id, msg_id)
+    elif c.data.startswith("vc_"):
+        country_key = c.data.replace("vc_", "")
+        if country_key in COUNTRIES:
+            voice_list_page(chat_id, country_key, msg_id)
     elif c.data.startswith("setvoice_"):
         key = c.data.replace("setvoice_", "")
         if key in VOICES:
             user_voice[chat_id] = key
-            voice_page(chat_id, msg_id)
+            voice_list_page(chat_id, VOICES[key]["country"], msg_id)
     elif c.data == "lyrics":
         user_mode[chat_id] = "lyrics"
         markup = types.InlineKeyboardMarkup()
@@ -191,7 +286,6 @@ def make_voice_note(chat_id, text):
     try:
         asyncio.run(_make())
 
-        # Send as single downloadable MP3 file
         filename = f"voice_{int(time.time())}.mp3"
         with open("voice.mp3", "rb") as f:
             bot.send_document(chat_id, f,
@@ -275,7 +369,7 @@ def set_away_cmd(m):
 # ---------- /voices ----------
 @bot.message_handler(commands=['voices'])
 def voices_cmd(m):
-    voice_page(m.chat.id)
+    voice_countries_page(m.chat.id)
 
 # ---------- /say /lrc ----------
 @bot.message_handler(commands=['say'])
