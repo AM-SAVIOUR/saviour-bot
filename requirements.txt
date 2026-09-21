@@ -1,3 +1,4 @@
+psycopg2-binary
 pyTelegramBotAPI>=4.20.0
 edge-tts
 flask
