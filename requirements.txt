@@ -1,4 +1,4 @@
-pyTelegramBotAPI
+pyTelegramBotAPI>=4.20.0
 edge-tts
 flask
 requests
