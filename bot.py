@@ -6,6 +6,7 @@ import asyncio
 import requests
 import io
 import json
+import time
 from flask import Flask, request
 
 # ---------- CONFIG ----------
@@ -27,6 +28,27 @@ app = Flask(__name__)
 user_mode = {}
 business_owner = {}
 AWAY_MESSAGES = {}
+
+# ---------- VOICES ----------
+VOICES = {
+    "ng_male":   {"name": "🇳🇬 Abeo (Nigerian male)",   "voice": "en-NG-AbeoNeural"},
+    "ng_female": {"name": "🇳🇬 Ezinne (Nigerian female)", "voice": "en-NG-EzinneNeural"},
+    "us_female": {"name": "🇺🇸 Aria (US female)",       "voice": "en-US-AriaNeural"},
+    "us_male":   {"name": "🇺🇸 Guy (US male)",          "voice": "en-US-GuyNeural"},
+    "uk_female": {"name": "🇬🇧 Sonia (UK female)",      "voice": "en-GB-SoniaNeural"},
+    "uk_male":   {"name": "🇬🇧 Ryan (UK male)",         "voice": "en-GB-RyanNeural"},
+    "in_female": {"name": "🇮🇳 Neerja (Indian female)", "voice": "en-IN-NeerjaNeural"},
+    "in_male":   {"name": "🇮🇳 Prabhat (Indian male)",  "voice": "en-IN-PrabhatNeural"},
+    "au_male":   {"name": "🇦🇺 William (Australian male)", "voice": "en-AU-WilliamNeural"},
+    "au_female": {"name": "🇦🇺 Natasha (Australian female)", "voice": "en-AU-NatashaNeural"},
+}
+
+DEFAULT_VOICE_KEY = "ng_male"
+user_voice = {}
+
+def get_voice(chat_id):
+    key = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
+    return VOICES[key]["voice"]
 
 # ---------- AUTO SET WEBHOOK ----------
 def set_webhook():
@@ -69,7 +91,6 @@ def main_menu(chat_id, message_id=None):
     else:
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
-# ---------- START ----------
 @bot.message_handler(commands=['start'])
 def start(m):
     try:
@@ -83,8 +104,9 @@ def help_text():
     return ("❓ *SAVIOUR — Help Guide*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "🎙 *Voice Tool*\n"
-            "Turn text into a voice note.\n"
-            "→ Tap Voice, then type your message\n"
+            "Turn text into a voice note + MP3.\n"
+            "→ Tap Voice, pick a voice\n"
+            "→ Type your message\n"
             "→ Or use /say your text\n\n"
             "📝 *Lyrics Tool*\n"
             "Get a synced .lrc file for any song.\n"
@@ -97,6 +119,27 @@ def help_text():
             "Unlimited use of all tools.\n\n"
             f"👑 Created by: @{CREATOR}")
 
+# ---------- VOICE PAGE ----------
+def voice_page(chat_id, message_id=None):
+    current = user_voice.get(chat_id, DEFAULT_VOICE_KEY)
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for key, info in VOICES.items():
+        label = f"✅ {info['name']}" if key == current else info['name']
+        markup.add(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+
+    text = ("🎙 *Voice Tool*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Pick a voice below.\n"
+            "Then type your message — you'll get a voice note + MP3.\n\n"
+            f"Current voice: *{VOICES[current]['name']}*")
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
 # ---------- BUTTONS ----------
 @bot.callback_query_handler(func=lambda c: True)
 def handle(c):
@@ -108,10 +151,12 @@ def handle(c):
         main_menu(chat_id, msg_id)
     elif c.data == "voice":
         user_mode[chat_id] = "voice"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text("🎙 *Voice Mode ON*\n\nType your message.",
-            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+        voice_page(chat_id, msg_id)
+    elif c.data.startswith("setvoice_"):
+        key = c.data.replace("setvoice_", "")
+        if key in VOICES:
+            user_voice[chat_id] = key
+            voice_page(chat_id, msg_id)
     elif c.data == "lyrics":
         user_mode[chat_id] = "lyrics"
         markup = types.InlineKeyboardMarkup()
@@ -136,14 +181,27 @@ def handle(c):
 
 # ---------- VOICE ----------
 def make_voice_note(chat_id, text):
+    voice = get_voice(chat_id)
     bot.send_message(chat_id, "🎙 Generating voice...")
+
     async def _make():
-        communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
+        communicate = edge_tts.Communicate(text, voice)
         await communicate.save("voice.mp3")
+
     try:
         asyncio.run(_make())
+
+        # Send as voice note
         with open("voice.mp3", "rb") as f:
             bot.send_voice(chat_id, f)
+
+        # Send as downloadable MP3
+        filename = f"voice_{int(time.time())}.mp3"
+        with open("voice.mp3", "rb") as f:
+            bot.send_document(chat_id, f,
+                visible_file_name=filename,
+                caption="📥 Save this MP3")
+
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Error: {e}")
 
@@ -217,6 +275,11 @@ def set_away_cmd(m):
     for conn_id in business_owner:
         AWAY_MESSAGES[conn_id] = text
     bot.reply_to(m, "✅ Away message set!")
+
+# ---------- /voices ----------
+@bot.message_handler(commands=['voices'])
+def voices_cmd(m):
+    voice_page(m.chat.id)
 
 # ---------- /say /lrc ----------
 @bot.message_handler(commands=['say'])
