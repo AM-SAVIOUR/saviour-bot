@@ -10,7 +10,7 @@ from flask import Flask, request
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://saviour-bot-014v.onrender.com")
-CREATOR  = "I_AM_SAVIOUR_1"
+CREATOR = "I_AM_SAVIOUR_1"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
