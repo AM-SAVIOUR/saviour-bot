@@ -535,8 +535,7 @@ def send_lrc(uid, chat_id, query):
     file_bytes = io.BytesIO(lrc.encode("utf-8"))
     file_bytes.name = filename
     bot.send_document(chat_id, file_bytes,
-        caption=f"🎤 {song['trackName']} — {song['artistName']}")
-      bump(uid, "lyrics")
+        caption=f"🎤 {song['trackName']} — {song['artistName']}") bump(uid, "lyrics")
 
 # ---------- BUSINESS ----------
 BUSINESS_OWNERS = {}
