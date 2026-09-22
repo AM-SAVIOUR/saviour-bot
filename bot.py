@@ -1182,4 +1182,23 @@ def handle_message(m):
     elif mode == "voice":
         make_voice_note(uid, m.chat.id, text)
     else:
-        
+        make_voice_note(uid, m.chat.id, text)
+
+# ---------- WEBHOOK ----------
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    try:
+        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+        bot.process_new_updates([update])
+    except Exception as e:
+        print("Webhook error:", e, flush=True)
+    return "ok", 200
+
+@app.route("/")
+def index():
+    return "SAVIOUR is running", 200
+
+if __name__ == "__main__":
+    print("Starting...", flush=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
