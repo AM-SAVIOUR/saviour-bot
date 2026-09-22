@@ -1,5 +1,9 @@
-psycopg2-binary
-pyTelegramBotAPI>=4.20.0
+pyTelegramBotAPI
 edge-tts
 flask
 requests
+psycopg2-binary
+deep-translator
+pypdf
+Pillow
+cloudinary
