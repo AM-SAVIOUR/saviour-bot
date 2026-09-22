@@ -41,13 +41,13 @@ FREE_IMAGE_LIMIT = 3
 
 print("=" * 50, flush=True)
 print("STARTUP", flush=True)
-print("BOT_TOKEN:", "YES" if BOT_TOKEN else "MISSING!", flush=True)
-print("DATABASE_URL:", "YES" if DATABASE_URL else "MISSING!", flush=True)
-print("CLOUDINARY:", "YES" if CLOUDINARY_CLOUD else "MISSING!", flush=True)
+print("BOT_TOKEN:", "YES" if BOT_TOKEN else "MISSING", flush=True)
+print("DATABASE_URL:", "YES" if DATABASE_URL else "MISSING", flush=True)
+print("CLOUDINARY:", "YES" if CLOUDINARY_CLOUD else "MISSING", flush=True)
 print("=" * 50, flush=True)
 
 if not BOT_TOKEN or not DATABASE_URL:
-    raise SystemExit("Missing required env vars")
+    raise SystemExit("Missing env vars")
 
 if CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET:
     cloudinary.config(
@@ -88,7 +88,16 @@ def init_db():
                 last_seen DATE DEFAULT CURRENT_DATE
             )
         """)
-        # Add new columns if table existed without them
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS files (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                file_type TEXT,
+                file_name TEXT,
+                cloud_url TEXT,
+                created DATE DEFAULT CURRENT_DATE
+            )
+        """)
         for col in ["translate_count INTEGER DEFAULT 0",
                     "pdf_count INTEGER DEFAULT 0",
                     "image_count INTEGER DEFAULT 0",
@@ -176,13 +185,9 @@ def can_use(uid, kind):
     return True
 
 def bump(uid, kind):
-    cols = {
-        "voice": "voice_count",
-        "lyrics": "lyrics_count",
-        "translate": "translate_count",
-        "pdf": "pdf_count",
-        "image": "image_count",
-    }
+    cols = {"voice": "voice_count", "lyrics": "lyrics_count",
+            "translate": "translate_count", "pdf": "pdf_count",
+            "image": "image_count"}
     col = cols.get(kind)
     if not col:
         return
@@ -263,19 +268,32 @@ def get_away_msg(uid):
     u = get_user(uid)
     return u["away_message"] if u else None
 
-# ---------- CLOUDINARY UPLOAD ----------
-def upload_to_cloud(file_path, resource_type="auto", folder="saviour"):
+def save_file_record(uid, file_type, file_name, cloud_url):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO files (user_id, file_type, file_name, cloud_url)
+                       VALUES (%s, %s, %s, %s)""",
+                    (uid, file_type, file_name, cloud_url))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("save_file_record error:", e, flush=True)
+
+# ---------- CLOUDINARY ----------
+def upload_to_cloud(file_path_or_bytes, resource_type="auto", folder="saviour"):
     if not CLOUDINARY_CLOUD:
         return None
     try:
         result = cloudinary.uploader.upload(
-            file_path,
+            file_path_or_bytes,
             resource_type=resource_type,
             folder=folder
         )
         return result.get("secure_url")
     except Exception as e:
-        print("Cloudinary upload error:", e, flush=True)
+        print("Cloudinary error:", e, flush=True)
         return None
 
 # ---------- VOICES ----------
@@ -447,3 +465,721 @@ def start(m):
         return
     save_user_meta(m.from_user.id, m.from_user.username, m.from_user.first_name)
     main_menu(m.chat.id)
+
+# ---------- HELP ----------
+def help_text():
+    return ("❓ *SAVIOUR — Help Guide*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🎙 *Voice Tool*\n"
+            "1. Tap Voice → pick a country → pick a voice\n"
+            "2. Type your message → get MP3\n\n"
+            "📝 *Lyrics Tool*\n"
+            "1. Tap Lyrics\n"
+            "2. Type: song name - artist\n"
+            "3. Get a synced .lrc file\n\n"
+            "🌍 *Translator*\n"
+            "1. Tap Tools → Translate\n"
+            "2. Pick language, then type text\n\n"
+            "📄 *PDF Suite*\n"
+            "Merge, split, compress, rotate PDFs\n\n"
+            "🖼 *Image Tools*\n"
+            "Compress, resize, convert images\n\n"
+            "💬 *Auto-Reply*\n"
+            "Set with: /setaway your message\n\n"
+            "💎 *Premium*\n"
+            f"Unlock unlimited — {PRICE}\n\n"
+            "*Free Limits:*\n"
+            f"🎙 Voice: {FREE_VOICE_LIMIT}/day\n"
+            f"📝 Lyrics: {FREE_LYRICS_LIMIT}/day\n"
+            f"🌍 Translate: {FREE_TRANSLATE_LIMIT}/day\n"
+            f"📄 PDF: {FREE_PDF_LIMIT}/day\n"
+            f"🖼 Image: {FREE_IMAGE_LIMIT}/day\n\n"
+            f"👑 Created by: @{CREATOR}")
+
+# ---------- VOICE PAGES ----------
+def voice_countries_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    btns = []
+    for ckey, cinfo in COUNTRIES.items():
+        count = sum(1 for v in VOICES.values() if v["country"] == ckey)
+        if count > 0:
+            btns.append(types.InlineKeyboardButton(
+                f"{cinfo['flag']} {cinfo['name']}",
+                callback_data=f"vc_{ckey}"))
+    for i in range(0, len(btns), 3):
+        markup.row(*btns[i:i+3])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+
+    current = get_voice_key(uid)
+    if current not in VOICES:
+        current = "ng_male"
+    cur_name = VOICES[current]["label"]
+    cur_country = COUNTRIES[VOICES[current]["country"]]
+
+    text = ("🎙 *Voice Tool*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Choose a country.\n\n"
+            f"Current: {cur_country['flag']} *{cur_name}*")
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+def voice_list_page(chat_id, uid, country_key, message_id=None):
+    current = get_voice_key(uid)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btns = []
+    for key, info in VOICES.items():
+        if info["country"] == country_key:
+            label = f"✅ {info['label']}" if key == current else info['label']
+            btns.append(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
+    for i in range(0, len(btns), 2):
+        markup.row(*btns[i:i+2])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="voice"))
+
+    c = COUNTRIES[country_key]
+    text = (f"🎙 *{c['flag']} {c['name']} Voices*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\nTap one.")
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- TRANSLATOR PAGE ----------
+def translate_lang_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btns = []
+    for code, name in TRANS_LANGS.items():
+        btns.append(types.InlineKeyboardButton(name, callback_data=f"tr_{code}"))
+    for i in range(0, len(btns), 2):
+        markup.row(*btns[i:i+2])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+
+    text = ("🌍 *Translator*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Pick target language.\n"
+            "Then type text to translate.\n\n"
+            "I auto-detect the source language.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- PDF PAGE ----------
+def pdf_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🖼 Images → PDF", callback_data="pdf_img2pdf"),
+        types.InlineKeyboardButton("🔗 Merge PDFs", callback_data="pdf_merge"),
+        types.InlineKeyboardButton("✂️ Split PDF", callback_data="pdf_split"),
+        types.InlineKeyboardButton("🗜 Compress PDF", callback_data="pdf_compress"),
+        types.InlineKeyboardButton("🔄 Rotate PDF", callback_data="pdf_rotate"),
+        types.InlineKeyboardButton("📸 PDF → Images", callback_data="pdf_pdf2img"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("📄 *PDF Suite*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Pick an action.\n"
+            "Max file size: 20 MB\n\n"
+            "1. Tap an action\n"
+            "2. Send your file(s)\n"
+            "3. Get the result")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- IMAGE PAGE ----------
+def image_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🗜 Compress", callback_data="img_compress"),
+        types.InlineKeyboardButton("📐 Resize", callback_data="img_resize"),
+        types.InlineKeyboardButton("🔄 Convert", callback_data="img_convert"),
+        types.InlineKeyboardButton("↩️ Rotate/Flip", callback_data="img_rotate"),
+        types.InlineKeyboardButton("📄 Image → PDF", callback_data="img_pdf"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("🖼 *Image Tools*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Pick an action.\n"
+            "Max file size: 20 MB\n\n"
+            "1. Tap an action\n"
+            "2. Send your image\n"
+            "3. Get the result")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- BUTTON HANDLER ----------
+@bot.callback_query_handler(func=lambda c: True)
+def handle(c):
+    bot.answer_callback_query(c.id)
+    uid = c.from_user.id
+    chat_id = c.message.chat.id
+    msg_id = c.message.message_id
+
+    if is_banned(uid):
+        return
+
+    if c.data == "menu":
+        main_menu(chat_id, msg_id)
+    elif c.data == "tools":
+        tools_menu(chat_id, msg_id)
+    elif c.data == "voice":
+        set_mode(uid, "voice")
+        voice_countries_page(chat_id, uid, msg_id)
+    elif c.data.startswith("vc_"):
+        ck = c.data.replace("vc_", "")
+        if ck in COUNTRIES:
+            voice_list_page(chat_id, uid, ck, msg_id)
+    elif c.data.startswith("setvoice_"):
+        key = c.data.replace("setvoice_", "")
+        if key in VOICES:
+            set_voice_key(uid, key)
+            voice_list_page(chat_id, uid, VOICES[key]["country"], msg_id)
+    elif c.data == "lyrics":
+        set_mode(uid, "lyrics")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text(
+            "📝 *Lyrics Mode ON*\n\n"
+            "Type: song name - artist\n"
+            "Example: Shape of You - Ed Sheeran",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "reply":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+        bot.edit_message_text(
+            "💬 *Auto-Reply (Business)*\n\nSet with: /setaway your message",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "upgrade":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text(premium_text(uid), chat_id, msg_id,
+            reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "help":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text(help_text(), chat_id, msg_id,
+            reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "translate":
+        set_mode(uid, "translate")
+        translate_lang_page(chat_id, uid, msg_id)
+    elif c.data.startswith("tr_"):
+        code = c.data.replace("tr_", "")
+        if code in TRANS_LANGS:
+            set_mode(uid, f"tr_{code}")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="translate"))
+            bot.edit_message_text(
+                f"🌍 *Translator*\n\n"
+                f"Target: {TRANS_LANGS[code]}\n\n"
+                f"Now type your text to translate.",
+                chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "pdf":
+        pdf_page(chat_id, msg_id)
+    elif c.data == "image":
+        image_page(chat_id, msg_id)
+    elif c.data.startswith("pdf_") or c.data.startswith("img_"):
+        set_mode(uid, c.data)
+        instruction = {
+            "pdf_img2pdf": "Send images to combine into a PDF",
+            "pdf_merge": "Send PDFs to merge",
+            "pdf_split": "Send a PDF to split",
+            "pdf_compress": "Send a PDF to compress",
+            "pdf_rotate": "Send a PDF to rotate",
+            "pdf_pdf2img": "Send a PDF to convert to images",
+            "img_compress": "Send an image to compress",
+            "img_resize": "Send an image to resize",
+            "img_convert": "Send an image to convert format",
+            "img_rotate": "Send an image to rotate/flip",
+            "img_pdf": "Send an image to convert to PDF",
+        }.get(c.data, "Send your file")
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+        bot.edit_message_text(
+            f"✅ *Ready*\n\n{instruction}",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- VOICE ----------
+def make_voice_note(uid, chat_id, text):
+    if not can_use(uid, "voice"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_VOICE_LIMIT} voice notes/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+    voice = get_voice(uid)
+    bot.send_message(chat_id, "🎙 Generating voice...")
+
+    async def _make():
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save("voice.mp3")
+
+    try:
+        asyncio.run(_make())
+        filename = f"voice_{int(time.time())}.mp3"
+
+        # Upload to Cloudinary
+        cloud_url = upload_to_cloud("voice.mp3", resource_type="video", folder="saviour/voice")
+
+        # Send to user
+        with open("voice.mp3", "rb") as f:
+            bot.send_document(chat_id, f,
+                visible_file_name=filename,
+                caption="🎙 Tap to play, long-press to save")
+
+        # Save record
+        if cloud_url:
+            save_file_record(uid, "voice", filename, cloud_url)
+
+        bump(uid, "voice")
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Error: {e}")
+
+# ---------- LYRICS ----------
+def send_lrc(uid, chat_id, query):
+    if not can_use(uid, "lyrics"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_LYRICS_LIMIT} lyrics/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+    bot.send_message(chat_id, "🔎 Searching lyrics...")
+    try:
+        r = requests.get("https://lrclib.net/api/search",
+                         params={"q": query}, timeout=15)
+        data = r.json()
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Search error: {e}")
+        return
+    if not data:
+        bot.send_message(chat_id, "❌ No lyrics found.")
+        return
+    song = None
+    for item in data:
+        if item.get("syncedLyrics"):
+            song = item
+            break
+    if not song:
+        bot.send_message(chat_id, "⚠️ No synced lyrics available.")
+        return
+    raw = song["syncedLyrics"].strip()
+    lrc = f"[ti:{song['trackName']}]\n[ar:{song['artistName']}]\n"
+    lrc += f"[al:{song.get('albumName', '')}]\n[by:SAVIOUR Bot]\n\n"
+    lrc += raw
+    filename = f"{song['artistName']} - {song['trackName']}.lrc".replace("/", "-")
+    file_bytes = io.BytesIO(lrc.encode("utf-8"))
+    file_bytes.name = filename
+
+    # Send to user
+    bot.send_document(chat_id, file_bytes,
+        caption=f"🎤 {song['trackName']} — {song['artistName']}")
+
+    # Upload to Cloudinary (raw type for text files)
+    try:
+        with open("temp_lrc.lrc", "w", encoding="utf-8") as f:
+            f.write(lrc)
+        cloud_url = upload_to_cloud("temp_lrc.lrc", resource_type="raw", folder="saviour/lyrics")
+        if cloud_url:
+            save_file_record(uid, "lyrics", filename, cloud_url)
+    except Exception as e:
+        print("Lyrics upload error:", e, flush=True)
+
+    bump(uid, "lyrics")
+
+# ---------- TRANSLATE ----------
+def do_translate(uid, chat_id, text, target_code):
+    if not can_use(uid, "translate"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_TRANSLATE_LIMIT} translations/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+    bot.send_message(chat_id, "🌍 Translating...")
+    try:
+        translated = GoogleTranslator(source="auto", target=target_code).translate(text)
+        result = (f"🌍 *Translation*\n"
+                  f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                  f"📝 *Original:*\n{text[:500]}\n\n"
+                  f"✅ *{TRANS_LANGS.get(target_code, target_code)}:*\n{translated[:500]}")
+        bot.send_message(chat_id, result, parse_mode="Markdown")
+        bump(uid, "translate")
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Translation error: {e}")
+
+# ---------- PDF & IMAGE PROCESSOR ----------
+def handle_pdf_image(uid, chat_id, mode, file_id, file_name):
+    try:
+        info = bot.get_file(file_id)
+        downloaded = bot.download_file(info.file_path)
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Download failed: {e}")
+        return
+
+    try:
+        if mode == "pdf_pdf2img":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            reader = PdfReader(io.BytesIO(downloaded))
+            pages = len(reader.pages)
+            bot.send_message(chat_id, f"📸 Converting {pages} pages...")
+            for i, page in enumerate(reader.pages):
+                for img in page.images:
+                    bio = io.BytesIO(img.data)
+                    bio.name = f"page_{i+1}.png"
+                    bot.send_document(chat_id, bio, caption=f"Page {i+1}")
+            bump(uid, "pdf")
+            return
+
+        if mode == "pdf_compress":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            reader = PdfReader(io.BytesIO(downloaded))
+            writer = PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+            out = io.BytesIO()
+            writer.write(out)
+            out.seek(0)
+            out.name = f"compressed_{file_name}"
+            bot.send_document(chat_id, out, caption="🗜 Compressed PDF")
+            bump(uid, "pdf")
+            return
+
+        if mode == "pdf_split":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            reader = PdfReader(io.BytesIO(downloaded))
+            for i, page in enumerate(reader.pages):
+                writer = PdfWriter()
+                writer.add_page(page)
+                out = io.BytesIO()
+                writer.write(out)
+                out.seek(0)
+                out.name = f"page_{i+1}.pdf"
+                bot.send_document(chat_id, out, caption=f"Page {i+1}")
+            bump(uid, "pdf")
+            return
+
+        if mode == "pdf_rotate":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            reader = PdfReader(io.BytesIO(downloaded))
+            writer = PdfWriter()
+            for page in reader.pages:
+                page.rotate(90)
+                writer.add_page(page)
+            out = io.BytesIO()
+            writer.write(out)
+            out.seek(0)
+            out.name = f"rotated_{file_name}"
+            bot.send_document(chat_id, out, caption="🔄 Rotated 90°")
+            bump(uid, "pdf")
+            return
+
+        if mode == "img_compress":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded))
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=60, optimize=True)
+            out.seek(0)
+            out.name = f"compressed_{file_name}"
+            bot.send_document(chat_id, out, caption="🗜 Compressed image")
+            bump(uid, "image")
+            return
+
+        if mode == "img_resize":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded))
+            w, h = img.size
+            img = img.resize((w // 2, h // 2))
+            out = io.BytesIO()
+            img.save(out, format="JPEG")
+            out.seek(0)
+            out.name = f"resized_{file_name}"
+            bot.send_document(chat_id, out, caption="📐 Resized to 50%")
+            bump(uid, "image")
+            return
+
+        if mode == "img_convert":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded)).convert("RGB")
+            out = io.BytesIO()
+            img.save(out, format="JPEG")
+            out.seek(0)
+            out.name = f"converted_{file_name.rsplit('.', 1)[0]}.jpg"
+            bot.send_document(chat_id, out, caption="🔄 Converted to JPG")
+            bump(uid, "image")
+            return
+
+        if mode == "img_rotate":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded))
+            img = img.rotate(-90, expand=True)
+            out = io.BytesIO()
+            img.save(out, format="JPEG")
+            out.seek(0)
+            out.name = f"rotated_{file_name}"
+            bot.send_document(chat_id, out, caption="↩️ Rotated 90°")
+            bump(uid, "image")
+            return
+
+        if mode == "img_pdf":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded)).convert("RGB")
+            out = io.BytesIO()
+            img.save(out, format="PDF")
+            out.seek(0)
+            out.name = f"image_{int(time.time())}.pdf"
+            bot.send_document(chat_id, out, caption="📄 Image → PDF")
+            bump(uid, "image")
+            return
+
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Processing error: {e}")
+
+# ---------- BUSINESS ----------
+BUSINESS_OWNERS = {}
+
+@bot.business_connection_handler(func=lambda conn: True)
+def on_business_connection(conn):
+    try:
+        if conn.is_enabled:
+            BUSINESS_OWNERS[conn.id] = conn.user.id
+            bot.send_message(conn.user.id,
+                "✅ SAVIOUR connected to your Telegram Business.\n"
+                "Use /setaway to set your auto-reply.")
+        else:
+            BUSINESS_OWNERS.pop(conn.id, None)
+    except Exception as e:
+        print("Business conn error:", e, flush=True)
+
+@bot.business_message_handler(func=lambda m: True)
+def on_business_message(m):
+    try:
+        for owner_uid in list(BUSINESS_OWNERS.values()):
+            away = get_away_msg(owner_uid)
+            if away:
+                bot.send_message(m.chat.id, away,
+                    business_connection_id=m.business_connection_id)
+                return
+    except Exception as e:
+        print("Business msg error:", e, flush=True)
+
+# ---------- /setaway ----------
+@bot.message_handler(commands=['setaway'])
+def set_away_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = m.text.replace('/setaway', '', 1).strip()
+    if not text:
+        bot.reply_to(m, "Usage: /setaway Your message here")
+        return
+    set_away_msg(uid, text)
+    bot.reply_to(m, "✅ Away message set!")
+
+# ---------- ADMIN ----------
+def admin_only(m):
+    return m.from_user.id == ADMIN_ID
+
+@bot.message_handler(commands=['addpaid'])
+def addpaid_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_paid(uid, 1)
+        bot.reply_to(m, f"✅ {uid} is now Premium")
+        try:
+            bot.send_message(uid, "🎉 You are now Premium!")
+        except:
+            pass
+    except:
+        bot.reply_to(m, "Usage: /addpaid user_id")
+
+@bot.message_handler(commands=['removepaid'])
+def removepaid_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_paid(uid, 0)
+        bot.reply_to(m, f"👤 {uid} removed from Premium")
+    except:
+        bot.reply_to(m, "Usage: /removepaid user_id")
+
+@bot.message_handler(commands=['ban'])
+def ban_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_banned(uid, 1)
+        bot.reply_to(m, f"🚫 {uid} banned")
+    except:
+        bot.reply_to(m, "Usage: /ban user_id")
+
+@bot.message_handler(commands=['unban'])
+def unban_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_banned(uid, 0)
+        bot.reply_to(m, f"✅ {uid} unbanned")
+    except:
+        bot.reply_to(m, "Usage: /unban user_id")
+
+@bot.message_handler(commands=['users'])
+def users_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT user_id, username, paid, banned
+                       FROM users ORDER BY last_seen DESC LIMIT 20""")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        out = "👥 *Recent Users:*\n\n"
+        for r in rows:
+            tag = "💎" if r["paid"] else "👤"
+            bn = "🚫" if r["banned"] else ""
+            out += f"{tag}{bn} `{r['user_id']}` @{r['username'] or '—'}\n"
+        bot.reply_to(m, out, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+@bot.message_handler(commands=['stats'])
+def stats_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) as total FROM users")
+        total = cur.fetchone()["total"]
+        cur.execute("SELECT COUNT(*) as p FROM users WHERE paid=1")
+        paid = cur.fetchone()["p"]
+        cur.execute("SELECT COUNT(*) as b FROM users WHERE banned=1")
+        banned = cur.fetchone()["b"]
+        cur.execute("SELECT COUNT(*) as f FROM files")
+        files = cur.fetchone()["f"]
+        cur.close()
+        conn.close()
+        bot.reply_to(m,
+            f"📊 *Stats*\n\n👥 Users: {total}\n💎 Paid: {paid}\n"
+            f"🚫 Banned: {banned}\n📁 Files stored: {files}",
+            parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+@bot.message_handler(commands=['admin'])
+def admin_cmd(m):
+    if not admin_only(m):
+        return
+    bot.reply_to(m,
+        "🛡️ *ADMIN PANEL*\n\n"
+        "/users — recent users\n"
+        "/stats — overview\n"
+        "/addpaid <id> — unlock\n"
+        "/removepaid <id> — lock\n"
+        "/ban <id> — ban\n"
+        "/unban <id> — unban",
+        parse_mode="Markdown")
+
+# ---------- /say /lrc ----------
+@bot.message_handler(commands=['say'])
+def say_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = m.text.replace('/say', '', 1).strip()
+    if text:
+        make_voice_note(uid, m.chat.id, text)
+
+@bot.message_handler(commands=['lrc'])
+def lrc_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    q = m.text.replace('/lrc', '', 1).strip()
+    if q:
+        send_lrc(uid, m.chat.id, q)
+
+# ---------- FILE HANDLER ----------
+@bot.message_handler(content_types=['document', 'photo'])
+def handle_file(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+
+    mode = get_mode(uid)
+
+    if m.content_type == 'document':
+        file_id = m.document.file_id
+        file_name = m.document.file_name or "file"
+    else:
+        file_id = m.photo[-1].file_id
+        file_name = f"photo_{int(time.time())}.jpg"
+
+    if mode.startswith("pdf_") or mode.startswith("img_"):
+        handle_pdf_image(uid, m.chat.id, mode, file_id, file_name)
+    else:
+        bot.reply_to(m, "Tap /start → Tools → PDF or Image to use this file.")
+
+# ---------- MAIN HANDLER ----------
+@bot.message_handler(func=lambda m: True)
+def handle_message(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = (m.text or "").strip()
+    if not text:
+        return
+
+    save_user_meta(uid, m.from_user.username, m.from_user.first_name)
+
+    mode = get_mode(uid)
+
+    if mode == "lyrics":
+        send_lrc(uid, m.chat.id, text)
+    elif mode.startswith("tr_"):
+        target = mode.replace("tr_", "")
+        do_translate(uid, m.chat.id, text, target)
+    elif mode == "translate":
+        bot.reply_to(m, "Pick a language first from the Translator menu.")
+    elif mode == "voice":
+        make_voice_note(uid, m.chat.id, text)
+    else:
+        
