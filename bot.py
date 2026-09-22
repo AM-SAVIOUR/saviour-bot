@@ -11,6 +11,11 @@ import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask, request
+import cloudinary
+import cloudinary.uploader
+from deep_translator import GoogleTranslator
+from pypdf import PdfReader, PdfWriter
+from PIL import Image
 
 # ---------- CONFIG ----------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -19,6 +24,10 @@ RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://saviour-bot-014v.onr
 CREATOR = "IAMSAVIOUR1"
 ADMIN_ID = 8872791323
 
+CLOUDINARY_CLOUD = os.environ.get("CLOUDINARY_CLOUD_NAME")
+CLOUDINARY_KEY = os.environ.get("CLOUDINARY_API_KEY")
+CLOUDINARY_SECRET = os.environ.get("CLOUDINARY_API_SECRET")
+
 PRICE = "₦1,500/month"
 PAY_NAME = "CHINAZAEKPERE SAVIOUR MBAEBIE"
 PAY_ACCOUNT = "9038530721"
@@ -26,17 +35,27 @@ PAY_BANK = "Opay"
 
 FREE_VOICE_LIMIT = 3
 FREE_LYRICS_LIMIT = 3
+FREE_TRANSLATE_LIMIT = 3
+FREE_PDF_LIMIT = 3
+FREE_IMAGE_LIMIT = 3
 
 print("=" * 50, flush=True)
 print("STARTUP", flush=True)
 print("BOT_TOKEN:", "YES" if BOT_TOKEN else "MISSING!", flush=True)
 print("DATABASE_URL:", "YES" if DATABASE_URL else "MISSING!", flush=True)
+print("CLOUDINARY:", "YES" if CLOUDINARY_CLOUD else "MISSING!", flush=True)
 print("=" * 50, flush=True)
 
-if not BOT_TOKEN:
-    raise SystemExit("BOT_TOKEN missing")
-if not DATABASE_URL:
-    raise SystemExit("DATABASE_URL missing")
+if not BOT_TOKEN or not DATABASE_URL:
+    raise SystemExit("Missing required env vars")
+
+if CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET:
+    cloudinary.config(
+        cloud_name=CLOUDINARY_CLOUD,
+        api_key=CLOUDINARY_KEY,
+        api_secret=CLOUDINARY_SECRET,
+        secure=True
+    )
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -60,16 +79,24 @@ def init_db():
                 away_message TEXT,
                 voice_count INTEGER DEFAULT 0,
                 lyrics_count INTEGER DEFAULT 0,
+                translate_count INTEGER DEFAULT 0,
+                pdf_count INTEGER DEFAULT 0,
+                image_count INTEGER DEFAULT 0,
                 mode TEXT DEFAULT 'voice',
                 last_reset DATE,
                 joined DATE DEFAULT CURRENT_DATE,
                 last_seen DATE DEFAULT CURRENT_DATE
             )
         """)
-        # Add mode column if table already existed without it
-        cur.execute("""
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'voice'
-        """)
+        # Add new columns if table existed without them
+        for col in ["translate_count INTEGER DEFAULT 0",
+                    "pdf_count INTEGER DEFAULT 0",
+                    "image_count INTEGER DEFAULT 0",
+                    "mode TEXT DEFAULT 'voice'"]:
+            try:
+                cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col}")
+            except:
+                pass
         conn.commit()
         cur.close()
         conn.close()
@@ -94,6 +121,7 @@ def get_user(uid):
             row = cur.fetchone()
         elif row["last_reset"] != today:
             cur.execute("""UPDATE users SET voice_count=0, lyrics_count=0,
+                           translate_count=0, pdf_count=0, image_count=0,
                            last_reset=%s, last_seen=%s WHERE user_id=%s""",
                         (today, today, uid))
             conn.commit()
@@ -135,14 +163,29 @@ def can_use(uid, kind):
     u = get_user(uid)
     if not u:
         return False
-    if kind == "voice":
-        return u["voice_count"] < FREE_VOICE_LIMIT
-    if kind == "lyrics":
-        return u["lyrics_count"] < FREE_LYRICS_LIMIT
+    limits = {
+        "voice": (u["voice_count"], FREE_VOICE_LIMIT),
+        "lyrics": (u["lyrics_count"], FREE_LYRICS_LIMIT),
+        "translate": (u["translate_count"], FREE_TRANSLATE_LIMIT),
+        "pdf": (u["pdf_count"], FREE_PDF_LIMIT),
+        "image": (u["image_count"], FREE_IMAGE_LIMIT),
+    }
+    if kind in limits:
+        used, maxv = limits[kind]
+        return used < maxv
     return True
 
 def bump(uid, kind):
-    col = "voice_count" if kind == "voice" else "lyrics_count"
+    cols = {
+        "voice": "voice_count",
+        "lyrics": "lyrics_count",
+        "translate": "translate_count",
+        "pdf": "pdf_count",
+        "image": "image_count",
+    }
+    col = cols.get(kind)
+    if not col:
+        return
     try:
         conn = db()
         cur = conn.cursor()
@@ -220,6 +263,21 @@ def get_away_msg(uid):
     u = get_user(uid)
     return u["away_message"] if u else None
 
+# ---------- CLOUDINARY UPLOAD ----------
+def upload_to_cloud(file_path, resource_type="auto", folder="saviour"):
+    if not CLOUDINARY_CLOUD:
+        return None
+    try:
+        result = cloudinary.uploader.upload(
+            file_path,
+            resource_type=resource_type,
+            folder=folder
+        )
+        return result.get("secure_url")
+    except Exception as e:
+        print("Cloudinary upload error:", e, flush=True)
+        return None
+
 # ---------- VOICES ----------
 COUNTRIES = {
     "ng": {"flag": "🇳🇬", "name": "Nigeria"},
@@ -275,6 +333,18 @@ def get_voice(uid):
         key = "ng_male"
     return VOICES[key]["voice"]
 
+# ---------- TRANSLATOR LANGUAGES ----------
+TRANS_LANGS = {
+    "en": "🇬🇧 English", "fr": "🇫🇷 French", "es": "🇪🇸 Spanish",
+    "de": "🇩🇪 German", "it": "🇮🇹 Italian", "pt": "🇵🇹 Portuguese",
+    "ru": "🇷🇺 Russian", "ar": "🇸🇦 Arabic", "zh-CN": "🇨🇳 Chinese",
+    "ja": "🇯🇵 Japanese", "ko": "🇰🇷 Korean", "hi": "🇮🇳 Hindi",
+    "yo": "🇳🇬 Yoruba", "ig": "🇳🇬 Igbo", "ha": "🇳🇬 Hausa",
+    "sw": "🇰🇪 Swahili", "tr": "🇹🇷 Turkish", "nl": "🇳🇱 Dutch",
+    "pl": "🇵🇱 Polish", "sv": "🇸🇪 Swedish", "id": "🇮🇩 Indonesian",
+    "vi": "🇻🇳 Vietnamese", "th": "🇹🇭 Thai", "fa": "🇮🇷 Persian",
+}
+
 # ---------- AUTO SET WEBHOOK ----------
 def set_webhook():
     try:
@@ -294,35 +364,33 @@ def set_webhook():
 
 set_webhook()
 
-# ---------- PREMIUM ----------
+# ---------- PREMIUM TEXT ----------
 def premium_text(uid):
-    # Admin — unlimited, no payment needed
     if uid == ADMIN_ID:
         return ("👑 *ADMIN ACCOUNT*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
                 "You are the creator of SAVIOUR.\n\n"
-                "✅ Unlimited voice notes\n"
-                "✅ Unlimited lyrics\n"
-                "✅ Full admin access\n\n"
+                "✅ Unlimited access to everything\n"
+                "✅ Full admin panel\n\n"
                 "Thank you for building SAVIOUR! 🚀")
-
-    # Paid users — premium active
     if is_paid(uid):
         return ("💎 *PREMIUM ACTIVE*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
                 "✅ Unlimited voice notes\n"
                 "✅ Unlimited lyrics\n"
-                "✅ Priority speed\n\n"
+                "✅ Unlimited translation\n"
+                "✅ Unlimited PDF tools\n"
+                "✅ Unlimited image tools\n\n"
                 "Thank you for supporting SAVIOUR!")
-
-    # Everyone else — payment page
     return (f"💎 *UPGRADE TO PREMIUM*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             f"💰 Price: *{PRICE}*\n\n"
             "🎁 *You get:*\n"
             "✅ Unlimited voice notes\n"
             "✅ Unlimited lyrics\n"
-            "✅ Priority speed\n\n"
+            "✅ Unlimited translation\n"
+            "✅ Unlimited PDF tools\n"
+            "✅ Unlimited image tools\n\n"
             "📋 *How to pay:*\n"
             f"1. Transfer {PRICE} to:\n"
             f"   🏦 {PAY_BANK}\n"
@@ -330,14 +398,15 @@ def premium_text(uid):
             f"   👤 {PAY_NAME}\n\n"
             f"2. Send receipt to @{CREATOR}\n"
             "3. Wait for approval\n\n"
-            "⚠️ Free: 3 voice + 3 lyrics per day")
+            "⚠️ Free: 3 uses/day per tool")
+
 # ---------- MAIN MENU ----------
 def main_menu(chat_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🎙 Voice", callback_data="voice"),
         types.InlineKeyboardButton("📝 Lyrics", callback_data="lyrics"),
-        types.InlineKeyboardButton("💬 Auto-Reply", callback_data="reply"),
+        types.InlineKeyboardButton("🔧 Tools", callback_data="tools"),
         types.InlineKeyboardButton("💎 Premium", callback_data="upgrade"),
         types.InlineKeyboardButton("❓ Help", callback_data="help"),
     )
@@ -352,6 +421,25 @@ def main_menu(chat_id, message_id=None):
     else:
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
+def tools_menu(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🌍 Translate", callback_data="translate"),
+        types.InlineKeyboardButton("📄 PDF Suite", callback_data="pdf"),
+        types.InlineKeyboardButton("🖼 Image Tools", callback_data="image"),
+        types.InlineKeyboardButton("💬 Auto-Reply", callback_data="reply"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="menu"),
+    )
+    text = ("🔧 *Tools*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "More powerful tools for daily use.\n\n"
+            "Tap one to begin.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
 @bot.message_handler(commands=['start'])
 def start(m):
     if is_banned(m.from_user.id):
@@ -359,403 +447,3 @@ def start(m):
         return
     save_user_meta(m.from_user.id, m.from_user.username, m.from_user.first_name)
     main_menu(m.chat.id)
-
-# ---------- HELP ----------
-def help_text():
-    return ("❓ *SAVIOUR — Help Guide*\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "🎙 *Voice Tool*\n"
-            "1. Tap Voice\n"
-            "2. Choose a country\n"
-            "3. Pick a voice\n"
-            "4. Type your message → MP3\n\n"
-            "📝 *Lyrics Tool*\n"
-            "1. Tap Lyrics\n"
-            "2. Type: song name - artist\n"
-            "3. Get a synced .lrc file\n\n"
-            "💬 *Auto-Reply*\n"
-            "Set with: /setaway your message\n\n"
-            "💎 *Premium*\n"
-            f"Unlock unlimited — {PRICE}\n\n"
-            "*Free Limits:*\n"
-            f"🎙 Voice: {FREE_VOICE_LIMIT}/day\n"
-            f"📝 Lyrics: {FREE_LYRICS_LIMIT}/day\n\n"
-            f"👑 Created by: @{CREATOR}")
-
-# ---------- VOICE PAGES ----------
-def voice_countries_page(chat_id, uid, message_id=None):
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    btns = []
-    for ckey, cinfo in COUNTRIES.items():
-        count = sum(1 for v in VOICES.values() if v["country"] == ckey)
-        if count > 0:
-            btns.append(types.InlineKeyboardButton(
-                f"{cinfo['flag']} {cinfo['name']}",
-                callback_data=f"vc_{ckey}"))
-    for i in range(0, len(btns), 3):
-        markup.row(*btns[i:i+3])
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-
-    current = get_voice_key(uid)
-    if current not in VOICES:
-        current = "ng_male"
-    cur_name = VOICES[current]["label"]
-    cur_country = COUNTRIES[VOICES[current]["country"]]
-
-    text = ("🎙 *Voice Tool*\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Choose a country.\n\n"
-            f"Current: {cur_country['flag']} *{cur_name}*")
-
-    if message_id:
-        bot.edit_message_text(text, chat_id, message_id,
-            reply_markup=markup, parse_mode="Markdown")
-    else:
-        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
-
-def voice_list_page(chat_id, uid, country_key, message_id=None):
-    current = get_voice_key(uid)
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btns = []
-    for key, info in VOICES.items():
-        if info["country"] == country_key:
-            label = f"✅ {info['label']}" if key == current else info['label']
-            btns.append(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
-    for i in range(0, len(btns), 2):
-        markup.row(*btns[i:i+2])
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="voice"))
-
-    c = COUNTRIES[country_key]
-    text = (f"🎙 *{c['flag']} {c['name']} Voices*\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\nTap one.")
-
-    if message_id:
-        bot.edit_message_text(text, chat_id, message_id,
-            reply_markup=markup, parse_mode="Markdown")
-    else:
-        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
-
-# ---------- BUTTONS ----------
-@bot.callback_query_handler(func=lambda c: True)
-def handle(c):
-    bot.answer_callback_query(c.id)
-    uid = c.from_user.id
-    chat_id = c.message.chat.id
-    msg_id = c.message.message_id
-
-    if is_banned(uid):
-        return
-
-    if c.data == "menu":
-        main_menu(chat_id, msg_id)
-    elif c.data == "voice":
-        set_mode(uid, "voice")
-        voice_countries_page(chat_id, uid, msg_id)
-    elif c.data.startswith("vc_"):
-        ck = c.data.replace("vc_", "")
-        if ck in COUNTRIES:
-            voice_list_page(chat_id, uid, ck, msg_id)
-    elif c.data.startswith("setvoice_"):
-        key = c.data.replace("setvoice_", "")
-        if key in VOICES:
-            set_voice_key(uid, key)
-            voice_list_page(chat_id, uid, VOICES[key]["country"], msg_id)
-    elif c.data == "lyrics":
-        set_mode(uid, "lyrics")
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text(
-            "📝 *Lyrics Mode ON*\n\n"
-            "Type: song name - artist\n"
-            "Example: Shape of You - Ed Sheeran",
-            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
-    elif c.data == "reply":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text(
-            "💬 *Auto-Reply (Business)*\n\nSet with: /setaway your message",
-            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
-    elif c.data == "upgrade":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text(premium_text(uid), chat_id, msg_id,
-            reply_markup=markup, parse_mode="Markdown")
-    elif c.data == "help":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
-        bot.edit_message_text(help_text(), chat_id, msg_id,
-            reply_markup=markup, parse_mode="Markdown")
-
-# ---------- VOICE ----------
-def make_voice_note(uid, chat_id, text):
-    if not can_use(uid, "voice"):
-        bot.send_message(chat_id,
-            f"🔒 *Free limit reached*\n\n"
-            f"Free: {FREE_VOICE_LIMIT} voice notes/day\n\n"
-            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
-            parse_mode="Markdown")
-        return
-    voice = get_voice(uid)
-    bot.send_message(chat_id, "🎙 Generating voice...")
-
-    async def _make():
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save("voice.mp3")
-
-    try:
-        asyncio.run(_make())
-        filename = f"voice_{int(time.time())}.mp3"
-        with open("voice.mp3", "rb") as f:
-            bot.send_document(chat_id, f,
-                visible_file_name=filename,
-                caption="🎙 Tap to play, long-press to save")
-        bump(uid, "voice")
-    except Exception as e:
-        bot.send_message(chat_id, f"⚠️ Error: {e}")
-
-# ---------- LYRICS ----------
-def send_lrc(uid, chat_id, query):
-    if not can_use(uid, "lyrics"):
-        bot.send_message(chat_id,
-            f"🔒 *Free limit reached*\n\n"
-            f"Free: {FREE_LYRICS_LIMIT} lyrics/day\n\n"
-            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
-            parse_mode="Markdown")
-        return
-    bot.send_message(chat_id, "🔎 Searching lyrics...")
-    try:
-        r = requests.get("https://lrclib.net/api/search",
-                         params={"q": query}, timeout=15)
-        data = r.json()
-    except Exception as e:
-        bot.send_message(chat_id, f"⚠️ Search error: {e}")
-        return
-    if not data:
-        bot.send_message(chat_id, "❌ No lyrics found.")
-        return
-    song = None
-    for item in data:
-        if item.get("syncedLyrics"):
-            song = item
-            break
-    if not song:
-        bot.send_message(chat_id, "⚠️ No synced lyrics available.")
-        return
-    raw = song["syncedLyrics"].strip()
-    lrc = f"[ti:{song['trackName']}]\n[ar:{song['artistName']}]\n"
-    lrc += f"[al:{song.get('albumName', '')}]\n[by:SAVIOUR Bot]\n\n"
-    lrc += raw
-    filename = f"{song['artistName']} - {song['trackName']}.lrc".replace("/", "-")
-    file_bytes = io.BytesIO(lrc.encode("utf-8"))
-    file_bytes.name = filename
-    bot.send_document(chat_id, file_bytes,
-        caption=f"🎤 {song['trackName']} — {song['artistName']}")
-    bump(uid, "lyrics")
-# ---------- BUSINESS ----------
-BUSINESS_OWNERS = {}
-
-@bot.business_connection_handler(func=lambda conn: True)
-def on_business_connection(conn):
-    try:
-        print(f"BUSINESS: id={conn.id} enabled={conn.is_enabled}", flush=True)
-        if conn.is_enabled:
-            BUSINESS_OWNERS[conn.id] = conn.user.id
-            bot.send_message(conn.user.id,
-                "✅ SAVIOUR connected to your Telegram Business.\n"
-                "Use /setaway to set your auto-reply.")
-        else:
-            BUSINESS_OWNERS.pop(conn.id, None)
-    except Exception as e:
-        print("Business conn error:", e, flush=True)
-
-@bot.business_message_handler(func=lambda m: True)
-def on_business_message(m):
-    try:
-        for owner_uid in list(BUSINESS_OWNERS.values()):
-            away = get_away_msg(owner_uid)
-            if away:
-                bot.send_message(m.chat.id, away,
-                    business_connection_id=m.business_connection_id)
-                print("Auto-reply sent", flush=True)
-                return
-    except Exception as e:
-        print("Business msg error:", e, flush=True)
-
-# ---------- /setaway ----------
-@bot.message_handler(commands=['setaway'])
-def set_away_cmd(m):
-    uid = m.from_user.id
-    if is_banned(uid):
-        return
-    text = m.text.replace('/setaway', '', 1).strip()
-    if not text:
-        bot.reply_to(m, "Usage: /setaway Your message here")
-        return
-    set_away_msg(uid, text)
-    bot.reply_to(m, "✅ Away message set!")
-
-# ---------- ADMIN ----------
-def admin_only(m):
-    return m.from_user.id == ADMIN_ID
-
-@bot.message_handler(commands=['addpaid'])
-def addpaid_cmd(m):
-    if not admin_only(m):
-        return
-    try:
-        uid = int(m.text.split()[1])
-        set_paid(uid, 1)
-        bot.reply_to(m, f"✅ {uid} is now Premium")
-        try:
-            bot.send_message(uid, "🎉 You are now Premium! Unlimited access unlocked.")
-        except:
-            pass
-    except:
-        bot.reply_to(m, "Usage: /addpaid user_id")
-
-@bot.message_handler(commands=['removepaid'])
-def removepaid_cmd(m):
-    if not admin_only(m):
-        return
-    try:
-        uid = int(m.text.split()[1])
-        set_paid(uid, 0)
-        bot.reply_to(m, f"👤 {uid} removed from Premium")
-    except:
-        bot.reply_to(m, "Usage: /removepaid user_id")
-
-@bot.message_handler(commands=['ban'])
-def ban_cmd(m):
-    if not admin_only(m):
-        return
-    try:
-        uid = int(m.text.split()[1])
-        set_banned(uid, 1)
-        bot.reply_to(m, f"🚫 {uid} banned")
-    except:
-        bot.reply_to(m, "Usage: /ban user_id")
-
-@bot.message_handler(commands=['unban'])
-def unban_cmd(m):
-    if not admin_only(m):
-        return
-    try:
-        uid = int(m.text.split()[1])
-        set_banned(uid, 0)
-        bot.reply_to(m, f"✅ {uid} unbanned")
-    except:
-        bot.reply_to(m, "Usage: /unban user_id")
-
-@bot.message_handler(commands=['users'])
-def users_cmd(m):
-    if not admin_only(m):
-        return
-    try:
-        conn = db()
-        cur = conn.cursor()
-        cur.execute("""SELECT user_id, username, paid, banned
-                       FROM users ORDER BY last_seen DESC LIMIT 20""")
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        out = "👥 *Recent Users:*\n\n"
-        for r in rows:
-            tag = "💎" if r["paid"] else "👤"
-            bn = "🚫" if r["banned"] else ""
-            out += f"{tag}{bn} `{r['user_id']}` @{r['username'] or '—'}\n"
-        bot.reply_to(m, out, parse_mode="Markdown")
-    except Exception as e:
-        bot.reply_to(m, f"Error: {e}")
-
-@bot.message_handler(commands=['stats'])
-def stats_cmd(m):
-    if not admin_only(m):
-        return
-    try:
-        conn = db()
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) as total FROM users")
-        total = cur.fetchone()["total"]
-        cur.execute("SELECT COUNT(*) as p FROM users WHERE paid=1")
-        paid = cur.fetchone()["p"]
-        cur.execute("SELECT COUNT(*) as b FROM users WHERE banned=1")
-        banned = cur.fetchone()["b"]
-        cur.close()
-        conn.close()
-        bot.reply_to(m,
-            f"📊 *Stats*\n\n"
-            f"👥 Users: {total}\n"
-            f"💎 Paid: {paid}\n"
-            f"🚫 Banned: {banned}",
-            parse_mode="Markdown")
-    except Exception as e:
-        bot.reply_to(m, f"Error: {e}")
-
-@bot.message_handler(commands=['admin'])
-def admin_cmd(m):
-    if not admin_only(m):
-        return
-    bot.reply_to(m,
-        "🛡️ *ADMIN PANEL*\n\n"
-        "/users — recent users\n"
-        "/stats — overview\n"
-        "/addpaid <id> — unlock\n"
-        "/removepaid <id> — lock\n"
-        "/ban <id> — ban\n"
-        "/unban <id> — unban",
-        parse_mode="Markdown")
-
-# ---------- /say /lrc ----------
-@bot.message_handler(commands=['say'])
-def say_cmd(m):
-    uid = m.from_user.id
-    if is_banned(uid):
-        return
-    text = m.text.replace('/say', '', 1).strip()
-    if text:
-        make_voice_note(uid, m.chat.id, text)
-
-@bot.message_handler(commands=['lrc'])
-def lrc_cmd(m):
-    uid = m.from_user.id
-    if is_banned(uid):
-        return
-    q = m.text.replace('/lrc', '', 1).strip()
-    if q:
-        send_lrc(uid, m.chat.id, q)
-
-# ---------- MAIN HANDLER ----------
-@bot.message_handler(func=lambda m: True)
-def handle_message(m):
-    uid = m.from_user.id
-    if is_banned(uid):
-        return
-    text = (m.text or "").strip()
-    if not text:
-        return
-
-    save_user_meta(uid, m.from_user.username, m.from_user.first_name)
-
-    mode = get_mode(uid)
-    if mode == "lyrics":
-        send_lrc(uid, m.chat.id, text)
-    else:
-        make_voice_note(uid, m.chat.id, text)
-
-# ---------- WEBHOOK ----------
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    try:
-        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-        bot.process_new_updates([update])
-    except Exception as e:
-        print("Webhook error:", e, flush=True)
-    return "ok", 200
-
-@app.route("/")
-def index():
-    return "SAVIOUR is running", 200
-
-if __name__ == "__main__":
-    print("Starting...", flush=True)
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
