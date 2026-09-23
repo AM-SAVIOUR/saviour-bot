@@ -1,6 +1,7 @@
 import os
 import telebot
 from telebot import types
+from telebot.types import BotCommand, BotCommandScopeChat
 import edge_tts
 import asyncio
 import requests
@@ -27,6 +28,8 @@ ADMIN_ID = 8872791323
 CLOUDINARY_CLOUD = os.environ.get("CLOUDINARY_CLOUD_NAME")
 CLOUDINARY_KEY = os.environ.get("CLOUDINARY_API_KEY")
 CLOUDINARY_SECRET = os.environ.get("CLOUDINARY_API_SECRET")
+
+PRIVACY_URL = "https://telegra.ph/SAVIOUR-privacy-policy-09-23"
 
 PRICE = "₦1,500/month"
 PAY_NAME = "CHINAZAEKPERE SAVIOUR MBAEBIE"
@@ -59,6 +62,34 @@ if CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
+
+# ---------- COMMAND MENU ----------
+PUBLIC_COMMANDS = [
+    BotCommand("start", "Open main menu"),
+    BotCommand("say", "Voice from text"),
+    BotCommand("lrc", "Lyrics file"),
+    BotCommand("setaway", "Away message for Business"),
+    BotCommand("privacy", "Privacy policy"),
+    BotCommand("help", "How to use"),
+]
+
+ADMIN_COMMANDS = PUBLIC_COMMANDS + [
+    BotCommand("admin", "Admin panel"),
+    BotCommand("addpaid", "Unlock a user"),
+    BotCommand("removepaid", "Remove premium"),
+    BotCommand("ban", "Ban a user"),
+    BotCommand("unban", "Unban a user"),
+    BotCommand("users", "Recent users"),
+    BotCommand("stats", "Bot statistics"),
+    BotCommand("maintenance", "Toggle maintenance mode"),
+]
+
+try:
+    bot.set_my_commands(PUBLIC_COMMANDS)
+    bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+    print("Commands menu set", flush=True)
+except Exception as e:
+    print("Command set error:", e, flush=True)
 
 # ---------- DATABASE ----------
 def db():
@@ -96,6 +127,46 @@ def init_db():
                 file_name TEXT,
                 cloud_url TEXT,
                 created DATE DEFAULT CURRENT_DATE
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS away_keywords (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                keyword TEXT,
+                reply TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS group_keywords (
+                id SERIAL PRIMARY KEY,
+                chat_id BIGINT,
+                owner_id BIGINT,
+                keyword TEXT,
+                reply TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS channels (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                channel_id TEXT,
+                channel_name TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scheduled (
+                id SERIAL PRIMARY KEY,
+                channel_id TEXT,
+                post_time TEXT,
+                message TEXT,
+                active INTEGER DEFAULT 1
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
             )
         """)
         for col in ["translate_count INTEGER DEFAULT 0",
@@ -281,6 +352,170 @@ def save_file_record(uid, file_type, file_name, cloud_url):
     except Exception as e:
         print("save_file_record error:", e, flush=True)
 
+def get_user_files(uid, file_type):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT file_name, cloud_url, created FROM files
+                       WHERE user_id=%s AND file_type=%s
+                       ORDER BY id DESC LIMIT 10""", (uid, file_type))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        print("get_user_files error:", e, flush=True)
+        return []
+
+def get_file_counts(uid):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT file_type, COUNT(*) as c FROM files
+                       WHERE user_id=%s GROUP BY file_type""", (uid,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {r["file_type"]: r["c"] for r in rows}
+    except:
+        return {}
+
+# ---------- MAINTENANCE ----------
+def get_maintenance():
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM settings WHERE key='maintenance'")
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return bool(row and row["value"] == "true")
+    except:
+        return False
+
+def set_maintenance(value):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO settings (key, value) VALUES ('maintenance', %s)
+                       ON CONFLICT (key) DO UPDATE SET value=%s""",
+                    (str(value).lower(), str(value).lower()))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("set_maintenance error:", e, flush=True)
+
+# ---------- AWAY KEYWORDS ----------
+def add_away_keyword(uid, keyword, reply):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM away_keywords WHERE user_id=%s AND keyword=%s",
+                    (uid, keyword.lower()))
+        cur.execute("""INSERT INTO away_keywords (user_id, keyword, reply)
+                       VALUES (%s, %s, %s)""", (uid, keyword.lower(), reply))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("add_away_keyword error:", e, flush=True)
+
+def get_away_keywords(uid):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT keyword, reply FROM away_keywords WHERE user_id=%s", (uid,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except:
+        return []
+
+def find_away_reply(uid, text):
+    text_low = text.lower()
+    for row in get_away_keywords(uid):
+        if row["keyword"] in text_low:
+            return row["reply"]
+    return None
+
+# ---------- GROUP KEYWORDS ----------
+def add_group_keyword(chat_id, owner_id, keyword, reply):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""DELETE FROM group_keywords WHERE chat_id=%s AND keyword=%s""",
+                    (chat_id, keyword.lower()))
+        cur.execute("""INSERT INTO group_keywords (chat_id, owner_id, keyword, reply)
+                       VALUES (%s, %s, %s, %s)""",
+                    (chat_id, owner_id, keyword.lower(), reply))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("add_group_keyword error:", e, flush=True)
+
+def get_group_keywords(chat_id):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT keyword, reply FROM group_keywords WHERE chat_id=%s",
+                    (chat_id,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except:
+        return []
+
+def find_group_reply(chat_id, text):
+    text_low = text.lower()
+    for row in get_group_keywords(chat_id):
+        if row["keyword"] in text_low:
+            return row["reply"]
+    return None
+
+# ---------- CHANNELS ----------
+def add_channel(uid, channel_id, channel_name):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO channels (user_id, channel_id, channel_name)
+                       VALUES (%s, %s, %s)""",
+                    (uid, channel_id, channel_name))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("add_channel error:", e, flush=True)
+
+def get_channels(uid):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT channel_id, channel_name FROM channels WHERE user_id=%s",
+                    (uid,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except:
+        return []
+
+def add_scheduled(channel_id, post_time, message):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO scheduled (channel_id, post_time, message)
+                       VALUES (%s, %s, %s)""",
+                    (channel_id, post_time, message))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("add_scheduled error:", e, flush=True)
+
 # ---------- CLOUDINARY ----------
 def upload_to_cloud(file_path_or_bytes, resource_type="auto", folder="saviour"):
     if not CLOUDINARY_CLOUD:
@@ -425,6 +660,7 @@ def main_menu(chat_id, message_id=None):
         types.InlineKeyboardButton("🎙 Voice", callback_data="voice"),
         types.InlineKeyboardButton("📝 Lyrics", callback_data="lyrics"),
         types.InlineKeyboardButton("🔧 Tools", callback_data="tools"),
+        types.InlineKeyboardButton("📚 My Files", callback_data="myfiles"),
         types.InlineKeyboardButton("💎 Premium", callback_data="upgrade"),
         types.InlineKeyboardButton("❓ Help", callback_data="help"),
     )
@@ -450,8 +686,7 @@ def tools_menu(chat_id, message_id=None):
     )
     text = ("🔧 *Tools*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "More powerful tools for daily use.\n\n"
-            "Tap one to begin.")
+            "More powerful tools for daily use.")
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
             reply_markup=markup, parse_mode="Markdown")
@@ -470,31 +705,34 @@ def start(m):
 def help_text():
     return ("❓ *SAVIOUR — Help Guide*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "🎙 *Voice Tool*\n"
-            "1. Tap Voice → pick a country → pick a voice\n"
-            "2. Type your message → get MP3\n\n"
-            "📝 *Lyrics Tool*\n"
-            "1. Tap Lyrics\n"
-            "2. Type: song name - artist\n"
-            "3. Get a synced .lrc file\n\n"
-            "🌍 *Translator*\n"
-            "1. Tap Tools → Translate\n"
-            "2. Pick language, then type text\n\n"
-            "📄 *PDF Suite*\n"
-            "Merge, split, compress, rotate PDFs\n\n"
-            "🖼 *Image Tools*\n"
-            "Compress, resize, convert images\n\n"
-            "💬 *Auto-Reply*\n"
-            "Set with: /setaway your message\n\n"
-            "💎 *Premium*\n"
-            f"Unlock unlimited — {PRICE}\n\n"
-            "*Free Limits:*\n"
-            f"🎙 Voice: {FREE_VOICE_LIMIT}/day\n"
-            f"📝 Lyrics: {FREE_LYRICS_LIMIT}/day\n"
-            f"🌍 Translate: {FREE_TRANSLATE_LIMIT}/day\n"
-            f"📄 PDF: {FREE_PDF_LIMIT}/day\n"
-            f"🖼 Image: {FREE_IMAGE_LIMIT}/day\n\n"
+            "🎙 *Voice* — Tap Voice → country → voice → type text\n"
+            "📝 *Lyrics* — Tap Lyrics → type: song - artist\n"
+            "🌍 *Translate* — Tools → Translate → pick language\n"
+            "📄 *PDF* — Tools → PDF → merge/split/compress\n"
+            "🖼 *Image* — Tools → Image → compress/resize/convert\n"
+            "📚 *My Files* — See all your past files\n"
+            "💬 *Auto-Reply* — /setaway keyword | reply\n\n"
+            "💎 *Premium* — " + PRICE + "\n\n"
+            "*Commands:*\n"
+            "/say — voice from text\n"
+            "/lrc — lyrics file\n"
+            "/privacy — privacy policy\n"
+            "/setaway — away message\n\n"
             f"👑 Created by: @{CREATOR}")
+
+@bot.message_handler(commands=['help'])
+def help_cmd(m):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+    bot.send_message(m.chat.id, help_text(), reply_markup=markup, parse_mode="Markdown")
+
+# ---------- PRIVACY ----------
+@bot.message_handler(commands=['privacy'])
+def privacy_cmd(m):
+    bot.reply_to(m,
+        "📜 *SAVIOUR Privacy Policy*\n\n"
+        f"Read it here:\n{PRIVACY_URL}",
+        parse_mode="Markdown")
 
 # ---------- VOICE PAGES ----------
 def voice_countries_page(chat_id, uid, message_id=None):
@@ -561,9 +799,8 @@ def translate_lang_page(chat_id, uid, message_id=None):
 
     text = ("🌍 *Translator*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Pick target language.\n"
-            "Then type text to translate.\n\n"
-            "I auto-detect the source language.")
+            "Pick target language.\nThen type text.\n\n"
+            "I auto-detect source language.")
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
             reply_markup=markup, parse_mode="Markdown")
@@ -574,7 +811,6 @@ def translate_lang_page(chat_id, uid, message_id=None):
 def pdf_page(chat_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("🖼 Images → PDF", callback_data="pdf_img2pdf"),
         types.InlineKeyboardButton("🔗 Merge PDFs", callback_data="pdf_merge"),
         types.InlineKeyboardButton("✂️ Split PDF", callback_data="pdf_split"),
         types.InlineKeyboardButton("🗜 Compress PDF", callback_data="pdf_compress"),
@@ -584,11 +820,8 @@ def pdf_page(chat_id, message_id=None):
     )
     text = ("📄 *PDF Suite*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Pick an action.\n"
             "Max file size: 20 MB\n\n"
-            "1. Tap an action\n"
-            "2. Send your file(s)\n"
-            "3. Get the result")
+            "Tap an action, then send your file.")
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
             reply_markup=markup, parse_mode="Markdown")
@@ -608,11 +841,61 @@ def image_page(chat_id, message_id=None):
     )
     text = ("🖼 *Image Tools*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Pick an action.\n"
             "Max file size: 20 MB\n\n"
-            "1. Tap an action\n"
-            "2. Send your image\n"
-            "3. Get the result")
+            "Tap an action, then send your image.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- MY FILES PAGE ----------
+def my_files_page(chat_id, uid, message_id=None):
+    counts = get_file_counts(uid)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(f"🎙 Voice ({counts.get('voice', 0)})",
+            callback_data="mf_voice"),
+        types.InlineKeyboardButton(f"📝 Lyrics ({counts.get('lyrics', 0)})",
+            callback_data="mf_lyrics"),
+        types.InlineKeyboardButton(f"📄 PDF ({counts.get('pdf', 0)})",
+            callback_data="mf_pdf"),
+        types.InlineKeyboardButton(f"🖼 Image ({counts.get('image', 0)})",
+            callback_data="mf_image"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="menu"),
+    )
+    text = ("📚 *My Files*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "All files you've generated.\n"
+            "They stay here even if you change phones.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+def my_files_list(chat_id, uid, file_type, message_id=None):
+    files = get_user_files(uid, file_type)
+    if not files:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="myfiles"))
+        text = f"📁 *No {file_type} files yet.*"
+        if message_id:
+            bot.edit_message_text(text, chat_id, message_id,
+                reply_markup=markup, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for i, f in enumerate(files):
+        label = f"{f['file_name'][:40]} ({f['created']})"
+        markup.add(types.InlineKeyboardButton(label, url=f["cloud_url"]))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="myfiles"))
+
+    text = (f"📁 *Your {file_type} files*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Tap any file to open/download it.")
     if message_id:
         bot.edit_message_text(text, chat_id, message_id,
             reply_markup=markup, parse_mode="Markdown")
@@ -628,6 +911,14 @@ def handle(c):
     msg_id = c.message.message_id
 
     if is_banned(uid):
+        return
+
+    if get_maintenance() and uid != ADMIN_ID:
+        bot.send_message(chat_id,
+            "🛠 *SAVIOUR is under maintenance*\n\n"
+            "We're making improvements.\n"
+            "Please try again in a few minutes.",
+            parse_mode="Markdown")
         return
 
     if c.data == "menu":
@@ -658,8 +949,16 @@ def handle(c):
     elif c.data == "reply":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+        keywords = get_away_keywords(uid)
+        kw_text = "\n".join([f"• `{k['keyword']}` → {k['reply'][:30]}" for k in keywords]) or "_No keywords yet_"
         bot.edit_message_text(
-            "💬 *Auto-Reply (Business)*\n\nSet with: /setaway your message",
+            "💬 *Auto-Reply (Business)*\n\n"
+            "Set keyword replies for your Business DMs.\n\n"
+            "*Current keywords:*\n" + kw_text + "\n\n"
+            "*Commands:*\n"
+            "`/setaway keyword | reply` — add keyword\n"
+            "`/clearaway` — remove all keywords\n"
+            "`/awaylist` — list keywords",
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
     elif c.data == "upgrade":
         markup = types.InlineKeyboardMarkup()
@@ -683,25 +982,29 @@ def handle(c):
             bot.edit_message_text(
                 f"🌍 *Translator*\n\n"
                 f"Target: {TRANS_LANGS[code]}\n\n"
-                f"Now type your text to translate.",
+                f"Type your text to translate.",
                 chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
     elif c.data == "pdf":
         pdf_page(chat_id, msg_id)
     elif c.data == "image":
         image_page(chat_id, msg_id)
+    elif c.data == "myfiles":
+        my_files_page(chat_id, uid, msg_id)
+    elif c.data.startswith("mf_"):
+        ftype = c.data.replace("mf_", "")
+        my_files_list(chat_id, uid, ftype, msg_id)
     elif c.data.startswith("pdf_") or c.data.startswith("img_"):
         set_mode(uid, c.data)
         instruction = {
-            "pdf_img2pdf": "Send images to combine into a PDF",
-            "pdf_merge": "Send PDFs to merge",
-            "pdf_split": "Send a PDF to split",
+            "pdf_merge": "Send PDFs one by one. Only the first will be processed for now.",
+            "pdf_split": "Send a PDF to split into pages",
             "pdf_compress": "Send a PDF to compress",
-            "pdf_rotate": "Send a PDF to rotate",
-            "pdf_pdf2img": "Send a PDF to convert to images",
+            "pdf_rotate": "Send a PDF to rotate 90°",
+            "pdf_pdf2img": "Send a PDF to extract images",
             "img_compress": "Send an image to compress",
-            "img_resize": "Send an image to resize",
-            "img_convert": "Send an image to convert format",
-            "img_rotate": "Send an image to rotate/flip",
+            "img_resize": "Send an image to resize to 50%",
+            "img_convert": "Send an image to convert to JPG",
+            "img_rotate": "Send an image to rotate 90°",
             "img_pdf": "Send an image to convert to PDF",
         }.get(c.data, "Send your file")
 
@@ -731,16 +1034,14 @@ def make_voice_note(uid, chat_id, text):
         asyncio.run(_make())
         filename = f"voice_{int(time.time())}.mp3"
 
-        # Upload to Cloudinary
-        cloud_url = upload_to_cloud("voice.mp3", resource_type="video", folder="saviour/voice")
+        cloud_url = upload_to_cloud("voice.mp3",
+            resource_type="video", folder="saviour/voice")
 
-        # Send to user
         with open("voice.mp3", "rb") as f:
             bot.send_document(chat_id, f,
                 visible_file_name=filename,
                 caption="🎙 Tap to play, long-press to save")
 
-        # Save record
         if cloud_url:
             save_file_record(uid, "voice", filename, cloud_url)
 
@@ -784,15 +1085,14 @@ def send_lrc(uid, chat_id, query):
     file_bytes = io.BytesIO(lrc.encode("utf-8"))
     file_bytes.name = filename
 
-    # Send to user
     bot.send_document(chat_id, file_bytes,
         caption=f"🎤 {song['trackName']} — {song['artistName']}")
 
-    # Upload to Cloudinary (raw type for text files)
     try:
         with open("temp_lrc.lrc", "w", encoding="utf-8") as f:
             f.write(lrc)
-        cloud_url = upload_to_cloud("temp_lrc.lrc", resource_type="raw", folder="saviour/lyrics")
+        cloud_url = upload_to_cloud("temp_lrc.lrc",
+            resource_type="raw", folder="saviour/lyrics")
         if cloud_url:
             save_file_record(uid, "lyrics", filename, cloud_url)
     except Exception as e:
@@ -811,6 +1111,7 @@ def do_translate(uid, chat_id, text, target_code):
         return
     bot.send_message(chat_id, "🌍 Translating...")
     try:
+        time.sleep(1)
         translated = GoogleTranslator(source="auto", target=target_code).translate(text)
         result = (f"🌍 *Translation*\n"
                   f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -859,6 +1160,17 @@ def handle_pdf_image(uid, chat_id, mode, file_id, file_name):
             out.seek(0)
             out.name = f"compressed_{file_name}"
             bot.send_document(chat_id, out, caption="🗜 Compressed PDF")
+
+            try:
+                out.seek(0)
+                with open("temp.pdf", "wb") as f:
+                    f.write(out.read())
+                cloud_url = upload_to_cloud("temp.pdf",
+                    resource_type="raw", folder="saviour/pdf")
+                if cloud_url:
+                    save_file_record(uid, "pdf", out.name, cloud_url)
+            except:
+                pass
             bump(uid, "pdf")
             return
 
@@ -895,6 +1207,15 @@ def handle_pdf_image(uid, chat_id, mode, file_id, file_name):
             bump(uid, "pdf")
             return
 
+        if mode == "pdf_merge":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            bot.send_message(chat_id,
+                "🔗 PDF merge: please send PDFs one at a time.\n"
+                "Currently limited to single-file operations.")
+            return
+
         if mode == "img_compress":
             if not can_use(uid, "image"):
                 bot.send_message(chat_id, "🔒 Free limit reached")
@@ -905,6 +1226,17 @@ def handle_pdf_image(uid, chat_id, mode, file_id, file_name):
             out.seek(0)
             out.name = f"compressed_{file_name}"
             bot.send_document(chat_id, out, caption="🗜 Compressed image")
+
+            try:
+                out.seek(0)
+                with open("temp.jpg", "wb") as f:
+                    f.write(out.read())
+                cloud_url = upload_to_cloud("temp.jpg",
+                    resource_type="image", folder="saviour/image")
+                if cloud_url:
+                    save_file_record(uid, "image", out.name, cloud_url)
+            except:
+                pass
             bump(uid, "image")
             return
 
@@ -966,6 +1298,52 @@ def handle_pdf_image(uid, chat_id, mode, file_id, file_name):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Processing error: {e}")
 
+# ---------- GROUP AUTO-REPLY ----------
+@bot.message_handler(content_types=['text'],
+                     func=lambda m: m.chat.type in ['group', 'supergroup'])
+def group_handler(m):
+    if not m.text:
+        return
+    text = m.text.strip()
+
+    if text.startswith("/addkeyword"):
+        if m.from_user.id != ADMIN_ID and not is_group_admin(m.chat.id, m.from_user.id):
+            bot.reply_to(m, "⛔ Only group admins can add keywords.")
+            return
+        parts = text.replace("/addkeyword", "", 1).strip()
+        if "|" not in parts:
+            bot.reply_to(m, "Usage: `/addkeyword word | reply`", parse_mode="Markdown")
+            return
+        keyword, reply = parts.split("|", 1)
+        add_group_keyword(m.chat.id, m.from_user.id, keyword.strip(), reply.strip())
+        bot.reply_to(m, f"✅ Keyword `{keyword.strip()}` added.", parse_mode="Markdown")
+        return
+
+    if text.startswith("/listkeywords"):
+        kws = get_group_keywords(m.chat.id)
+        if not kws:
+            bot.reply_to(m, "No keywords set.")
+            return
+        out = "📋 *Keywords:*\n\n"
+        for k in kws:
+            out += f"• `{k['keyword']}` → {k['reply'][:50]}\n"
+        bot.reply_to(m, out, parse_mode="Markdown")
+        return
+
+    if text.startswith("/"):
+        return
+
+    reply = find_group_reply(m.chat.id, text)
+    if reply:
+        bot.reply_to(m, reply)
+
+def is_group_admin(chat_id, user_id):
+    try:
+        member = bot.get_chat_member(chat_id, user_id)
+        return member.status in ["administrator", "creator"]
+    except:
+        return False
+
 # ---------- BUSINESS ----------
 BUSINESS_OWNERS = {}
 
@@ -976,7 +1354,7 @@ def on_business_connection(conn):
             BUSINESS_OWNERS[conn.id] = conn.user.id
             bot.send_message(conn.user.id,
                 "✅ SAVIOUR connected to your Telegram Business.\n"
-                "Use /setaway to set your auto-reply.")
+                "Use /setaway keyword | reply to set auto-replies.")
         else:
             BUSINESS_OWNERS.pop(conn.id, None)
     except Exception as e:
@@ -986,6 +1364,12 @@ def on_business_connection(conn):
 def on_business_message(m):
     try:
         for owner_uid in list(BUSINESS_OWNERS.values()):
+            if m.text:
+                reply = find_away_reply(owner_uid, m.text)
+                if reply:
+                    bot.send_message(m.chat.id, reply,
+                        business_connection_id=m.business_connection_id)
+                    return
             away = get_away_msg(owner_uid)
             if away:
                 bot.send_message(m.chat.id, away,
@@ -994,7 +1378,7 @@ def on_business_message(m):
     except Exception as e:
         print("Business msg error:", e, flush=True)
 
-# ---------- /setaway ----------
+# ---------- /setaway (upgraded) ----------
 @bot.message_handler(commands=['setaway'])
 def set_away_cmd(m):
     uid = m.from_user.id
@@ -1002,10 +1386,149 @@ def set_away_cmd(m):
         return
     text = m.text.replace('/setaway', '', 1).strip()
     if not text:
-        bot.reply_to(m, "Usage: /setaway Your message here")
+        bot.reply_to(m,
+            "💬 *Auto-Reply for Business*\n\n"
+            "*Commands:*\n"
+            "`/setaway keyword | reply` — add keyword reply\n"
+            "`/setaway default text` — set fallback reply\n"
+            "`/awaylist` — see all keywords\n"
+            "`/clearaway` — remove all\n\n"
+            "*Examples:*\n"
+            "`/setaway price | Our prices start at ₦5000`\n"
+            "`/setaway hours | We are open 9am-6pm`",
+            parse_mode="Markdown")
         return
-    set_away_msg(uid, text)
-    bot.reply_to(m, "✅ Away message set!")
+
+    if "|" in text:
+        keyword, reply = text.split("|", 1)
+        add_away_keyword(uid, keyword.strip(), reply.strip())
+        bot.reply_to(m, f"✅ Keyword `{keyword.strip()}` added.", parse_mode="Markdown")
+    else:
+        set_away_msg(uid, text)
+        bot.reply_to(m, "✅ Default away message set!")
+
+@bot.message_handler(commands=['awaylist'])
+def awaylist_cmd(m):
+    uid = m.from_user.id
+    kws = get_away_keywords(uid)
+    default = get_away_msg(uid)
+    out = "📋 *Your Away Replies*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    if default:
+        out += f"*Default:* {default}\n\n"
+    if kws:
+        out += "*Keywords:*\n"
+        for k in kws:
+            out += f"• `{k['keyword']}` → {k['reply'][:50]}\n"
+    else:
+        out += "_No keywords yet._"
+    bot.reply_to(m, out, parse_mode="Markdown")
+
+@bot.message_handler(commands=['clearaway'])
+def clearaway_cmd(m):
+    uid = m.from_user.id
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM away_keywords WHERE user_id=%s", (uid,))
+        cur.execute("UPDATE users SET away_message=NULL WHERE user_id=%s", (uid,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        bot.reply_to(m, "✅ All away replies cleared.")
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+# ---------- CHANNEL POSTER ----------
+@bot.message_handler(commands=['setchannel'])
+def setchannel_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    parts = m.text.replace('/setchannel', '', 1).strip().split()
+    if not parts:
+        bot.reply_to(m,
+            "📢 *Set Channel*\n\n"
+            "Usage: `/setchannel <channel_id>`\n"
+            "Example: `/setchannel -1001234567890`\n\n"
+            "Add SAVIOUR as admin to your channel first.",
+            parse_mode="Markdown")
+        return
+    channel_id = parts[0]
+    add_channel(uid, channel_id, parts[1] if len(parts) > 1 else channel_id)
+    bot.reply_to(m, f"✅ Channel `{channel_id}` linked.", parse_mode="Markdown")
+
+@bot.message_handler(commands=['post'])
+def post_cmd(m):
+    uid = m.from_user.id
+    if uid != ADMIN_ID:
+        return
+    text = m.text.replace('/post', '', 1).strip()
+    if not text:
+        bot.reply_to(m, "Usage: `/post your message`", parse_mode="Markdown")
+        return
+    channels = get_channels(uid)
+    if not channels:
+        bot.reply_to(m, "⚠️ No channel linked. Use /setchannel first.")
+        return
+    for ch in channels:
+        try:
+            bot.send_message(ch["channel_id"], text)
+            bot.reply_to(m, f"✅ Posted to {ch['channel_name']}")
+        except Exception as e:
+            bot.reply_to(m, f"❌ Failed: {e}")
+
+@bot.message_handler(commands=['schedule'])
+def schedule_cmd(m):
+    if m.from_user.id != ADMIN_ID:
+        return
+    text = m.text.replace('/schedule', '', 1).strip()
+    if "|" not in text:
+        bot.reply_to(m,
+            "Usage: `/schedule HH:MM | message`\n"
+            "Example: `/schedule 09:00 | Good morning!`",
+            parse_mode="Markdown")
+        return
+    time_part, msg = text.split("|", 1)
+    channels = get_channels(ADMIN_ID)
+    if not channels:
+        bot.reply_to(m, "⚠️ No channel linked. Use /setchannel first.")
+        return
+    for ch in channels:
+        add_scheduled(ch["channel_id"], time_part.strip(), msg.strip())
+    bot.reply_to(m,
+        f"✅ Scheduled for {time_part.strip()} daily.",
+        parse_mode="Markdown")
+
+# ---------- /say /lrc (fixed) ----------
+@bot.message_handler(commands=['say'])
+def say_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = m.text.replace('/say', '', 1).strip()
+    if not text:
+        bot.reply_to(m,
+            "🎙 *Voice from Text*\n\n"
+            "Usage: `/say your text here`\n"
+            "Example: `/say Good morning everyone`",
+            parse_mode="Markdown")
+        return
+    make_voice_note(uid, m.chat.id, text)
+
+@bot.message_handler(commands=['lrc'])
+def lrc_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    q = m.text.replace('/lrc', '', 1).strip()
+    if not q:
+        bot.reply_to(m,
+            "📝 *Lyrics Search*\n\n"
+            "Usage: `/lrc song name - artist`\n"
+            "Example: `/lrc Shape of You - Ed Sheeran`",
+            parse_mode="Markdown")
+        return
+    send_lrc(uid, m.chat.id, q)
 
 # ---------- ADMIN ----------
 def admin_only(m):
@@ -1098,8 +1621,11 @@ def stats_cmd(m):
         cur.close()
         conn.close()
         bot.reply_to(m,
-            f"📊 *Stats*\n\n👥 Users: {total}\n💎 Paid: {paid}\n"
-            f"🚫 Banned: {banned}\n📁 Files stored: {files}",
+            f"📊 *Stats*\n\n"
+            f"👥 Users: {total}\n"
+            f"💎 Paid: {paid}\n"
+            f"🚫 Banned: {banned}\n"
+            f"📁 Files: {files}",
             parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(m, f"Error: {e}")
@@ -1110,32 +1636,41 @@ def admin_cmd(m):
         return
     bot.reply_to(m,
         "🛡️ *ADMIN PANEL*\n\n"
+        "*Users:*\n"
         "/users — recent users\n"
         "/stats — overview\n"
         "/addpaid <id> — unlock\n"
         "/removepaid <id> — lock\n"
         "/ban <id> — ban\n"
-        "/unban <id> — unban",
+        "/unban <id> — unban\n\n"
+        "*Channel:*\n"
+        "/setchannel <id> — link channel\n"
+        "/post <message> — post now\n"
+        "/schedule HH:MM | message\n\n"
+        "*System:*\n"
+        "/maintenance on|off — toggle maintenance",
         parse_mode="Markdown")
 
-# ---------- /say /lrc ----------
-@bot.message_handler(commands=['say'])
-def say_cmd(m):
-    uid = m.from_user.id
-    if is_banned(uid):
+@bot.message_handler(commands=['maintenance'])
+def maintenance_cmd(m):
+    if not admin_only(m):
         return
-    text = m.text.replace('/say', '', 1).strip()
-    if text:
-        make_voice_note(uid, m.chat.id, text)
-
-@bot.message_handler(commands=['lrc'])
-def lrc_cmd(m):
-    uid = m.from_user.id
-    if is_banned(uid):
-        return
-    q = m.text.replace('/lrc', '', 1).strip()
-    if q:
-        send_lrc(uid, m.chat.id, q)
+    arg = m.text.replace('/maintenance', '', 1).strip().lower()
+    if arg == "on":
+        set_maintenance(True)
+        bot.reply_to(m, "🛠 Maintenance mode ON\n\nUsers will see a maintenance message.")
+    elif arg == "off":
+        set_maintenance(False)
+        bot.reply_to(m, "✅ Maintenance mode OFF\n\nUsers can use the bot now.")
+    else:
+        status = "ON" if get_maintenance() else "OFF"
+        bot.reply_to(m,
+            f"🛠 *Maintenance Mode*\n\n"
+            f"Status: *{status}*\n\n"
+            f"Commands:\n"
+            f"`/maintenance on`\n"
+            f"`/maintenance off`",
+            parse_mode="Markdown")
 
 # ---------- FILE HANDLER ----------
 @bot.message_handler(content_types=['document', 'photo'])
@@ -1164,8 +1699,23 @@ def handle_message(m):
     uid = m.from_user.id
     if is_banned(uid):
         return
+
+    if get_maintenance() and uid != ADMIN_ID:
+        bot.reply_to(m,
+            "🛠 *SAVIOUR is under maintenance*\n\n"
+            "We're making improvements.\n"
+            "Please try again in a few minutes.",
+            parse_mode="Markdown")
+        return
+
+    if m.chat.type in ['group', 'supergroup']:
+        return
+
     text = (m.text or "").strip()
     if not text:
+        return
+
+    if text.startswith("/"):
         return
 
     save_user_meta(uid, m.from_user.username, m.from_user.first_name)
@@ -1201,4 +1751,3 @@ def index():
 if __name__ == "__main__":
     print("Starting...", flush=True)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
