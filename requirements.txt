@@ -9,3 +9,5 @@ Pillow
 cloudinary
 pytesseract
 qrcode
+SpeechRecognition
+pydub
