@@ -901,3 +901,731 @@ def add_scam_alert(title, description):
         return True
     except:
         return False
+
+# ---------- LINK CACHE ----------
+def get_cached_link(url):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT result FROM link_cache
+                       WHERE url=%s AND cached_at > NOW() - INTERVAL '24 hours'""",
+                    (url,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row["result"] if row else None
+    except:
+        return None
+
+def cache_link(url, result):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO link_cache (url, result) VALUES (%s, %s)
+                       ON CONFLICT (url) DO UPDATE SET
+                       result=%s, cached_at=NOW()""",
+                    (url, result, result))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except:
+        pass
+
+# ---------- CLOUDINARY ----------
+def upload_to_cloud(file_path_or_bytes, resource_type="auto", folder="saviour"):
+    if not CLOUDINARY_CLOUD:
+        return None
+    try:
+        result = cloudinary.uploader.upload(
+            file_path_or_bytes,
+            resource_type=resource_type,
+            folder=folder
+        )
+        return result.get("secure_url")
+    except Exception as e:
+        print("Cloudinary error:", e, flush=True)
+        return None
+
+# ---------- VOICES ----------
+COUNTRIES = {
+    "ng": {"flag": "🇳🇬", "name": "Nigeria"},
+    "us": {"flag": "🇺🇸", "name": "USA"},
+    "uk": {"flag": "🇬🇧", "name": "UK"},
+    "au": {"flag": "🇦🇺", "name": "Australia"},
+    "in": {"flag": "🇮🇳", "name": "India"},
+    "sa": {"flag": "🇸🇦", "name": "Arabic"},
+    "fr": {"flag": "🇫🇷", "name": "French"},
+    "es": {"flag": "🇪🇸", "name": "Spanish"},
+    "za": {"flag": "🇿🇦", "name": "S. Africa"},
+    "ph": {"flag": "🇵🇭", "name": "Philippines"},
+}
+
+VOICES = {
+    "ng_male":   {"country": "ng", "label": "Abeo (M)",  "voice": "en-NG-AbeoNeural"},
+    "ng_female": {"country": "ng", "label": "Ezinne (F)", "voice": "en-NG-EzinneNeural"},
+    "us_aria":   {"country": "us", "label": "Aria (F)",   "voice": "en-US-AriaNeural"},
+    "us_guy":    {"country": "us", "label": "Guy (M)",    "voice": "en-US-GuyNeural"},
+    "us_jenny":  {"country": "us", "label": "Jenny (F)",  "voice": "en-US-JennyNeural"},
+    "us_michelle":{"country": "us","label": "Michelle (F)","voice": "en-US-MichelleNeural"},
+    "us_eric":   {"country": "us", "label": "Eric (M)",   "voice": "en-US-EricNeural"},
+    "us_ana":    {"country": "us", "label": "Ana (F)",    "voice": "en-US-AnaNeural"},
+    "uk_sonia":  {"country": "uk", "label": "Sonia (F)",  "voice": "en-GB-SoniaNeural"},
+    "uk_ryan":   {"country": "uk", "label": "Ryan (M)",   "voice": "en-GB-RyanNeural"},
+    "uk_libby":  {"country": "uk", "label": "Libby (F)",  "voice": "en-GB-LibbyNeural"},
+    "uk_thomas": {"country": "uk", "label": "Thomas (M)", "voice": "en-GB-ThomasNeural"},
+    "au_william":{"country": "au", "label": "William (M)","voice": "en-AU-WilliamNeural"},
+    "au_natasha":{"country": "au", "label": "Natasha (F)","voice": "en-AU-NatashaNeural"},
+    "in_neerja": {"country": "in", "label": "Neerja (F)", "voice": "en-IN-NeerjaNeural"},
+    "in_prabhat":{"country": "in", "label": "Prabhat (M)","voice": "en-IN-PrabhatNeural"},
+    "in_swara":  {"country": "in", "label": "Swara (F)",  "voice": "en-IN-SwaraNeural"},
+    "in_madhur": {"country": "in", "label": "Madhur (M)", "voice": "en-IN-MadhurNeural"},
+    "sa_salma":  {"country": "sa", "label": "Salma (F)",  "voice": "ar-SA-SalmaNeural"},
+    "sa_zariyah":{"country": "sa", "label": "Zariyah (F)","voice": "ar-SA-ZariyahNeural"},
+    "sa_hamed":  {"country": "sa", "label": "Hamed (M)",  "voice": "ar-SA-HamedNeural"},
+    "fr_denise": {"country": "fr", "label": "Denise (F)", "voice": "fr-FR-DeniseNeural"},
+    "fr_henri":  {"country": "fr", "label": "Henri (M)",  "voice": "fr-FR-HenriNeural"},
+    "fr_eloise": {"country": "fr", "label": "Eloise (F)", "voice": "fr-FR-EloiseNeural"},
+    "es_elvira": {"country": "es", "label": "Elvira (F)", "voice": "es-ES-ElviraNeural"},
+    "es_alvaro": {"country": "es", "label": "Alvaro (M)", "voice": "es-ES-AlvaroNeural"},
+    "es_lucia":  {"country": "es", "label": "Lucia (F)",  "voice": "es-ES-LuciaNeural"},
+    "za_leah":   {"country": "za", "label": "Leah (F)",   "voice": "en-ZA-LeahNeural"},
+    "za_luke":   {"country": "za", "label": "Luke (M)",   "voice": "en-ZA-LukeNeural"},
+    "ph_rosa":   {"country": "ph", "label": "Rosa (F)",   "voice": "fil-PH-RosaNeural"},
+    "ph_angelo": {"country": "ph", "label": "Angelo (M)", "voice": "fil-PH-AngeloNeural"},
+    "ph_blessica":{"country":"ph", "label": "Blessica (F)","voice":"fil-PH-BlessicaNeural"},
+}
+
+def get_voice(uid):
+    key = get_voice_key(uid)
+    if key not in VOICES:
+        key = "ng_male"
+    return VOICES[key]["voice"]
+
+# ---------- TRANSLATOR LANGUAGES ----------
+TRANS_LANGS = {
+    "en": "🇬🇧 English", "fr": "🇫🇷 French", "es": "🇪🇸 Spanish",
+    "de": "🇩🇪 German", "it": "🇮🇹 Italian", "pt": "🇵🇹 Portuguese",
+    "ru": "🇷🇺 Russian", "ar": "🇸🇦 Arabic", "zh-CN": "🇨🇳 Chinese",
+    "ja": "🇯🇵 Japanese", "ko": "🇰🇷 Korean", "hi": "🇮🇳 Hindi",
+    "yo": "🇳🇬 Yoruba", "ig": "🇳🇬 Igbo", "ha": "🇳🇬 Hausa",
+    "sw": "🇰🇪 Swahili", "tr": "🇹🇷 Turkish", "nl": "🇳🇱 Dutch",
+    "pl": "🇵🇱 Polish", "sv": "🇸🇪 Swedish", "id": "🇮🇩 Indonesian",
+    "vi": "🇻🇳 Vietnamese", "th": "🇹🇭 Thai", "fa": "🇮🇷 Persian",
+}
+
+# ---------- TRIVIA API ----------
+TRIVIA_FALLBACK = [
+    {"q": "What is the capital of Nigeria?", "a": "Abuja",
+     "options": ["Lagos", "Abuja", "Kano", "Ibadan"]},
+    {"q": "Who was Nigeria's first president?", "a": "Nnamdi Azikiwe",
+     "options": ["Nnamdi Azikiwe", "Olusegun Obasanjo", "Yakubu Gowon", "Sani Abacha"]},
+    {"q": "What is the largest ocean?", "a": "Pacific",
+     "options": ["Atlantic", "Indian", "Pacific", "Arctic"]},
+    {"q": "How many continents are there?", "a": "7",
+     "options": ["5", "6", "7", "8"]},
+    {"q": "What year did Nigeria gain independence?", "a": "1960",
+     "options": ["1957", "1960", "1963", "1970"]},
+]
+
+def fetch_trivia_questions():
+    try:
+        r = requests.get(
+            "https://opentdb.com/api.php",
+            params={"amount": 5, "type": "multiple"},
+            timeout=10
+        )
+        data = r.json()
+        if data.get("response_code") == 0:
+            questions = []
+            for item in data["results"]:
+                correct = item["correct_answer"]
+                incorrect = item["incorrect_answers"]
+                options = [correct] + incorrect
+                random.shuffle(options)
+                questions.append({
+                    "q": item["question"],
+                    "a": correct,
+                    "options": options
+                })
+            return questions
+    except Exception as e:
+        print("Trivia API error:", e, flush=True)
+
+    # Fallback
+    return random.sample(TRIVIA_FALLBACK, min(5, len(TRIVIA_FALLBACK)))
+
+# ---------- AUTO SET WEBHOOK ----------
+def set_webhook():
+    try:
+        allowed = json.dumps([
+            "message", "callback_query",
+            "business_connection", "business_message",
+            "edited_business_message", "deleted_business_messages",
+            "chat_member", "my_chat_member"
+        ])
+        r = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
+            data={"url": f"{RENDER_URL}/{BOT_TOKEN}", "allowed_updates": allowed},
+            timeout=10
+        )
+        print("Webhook:", r.json(), flush=True)
+    except Exception as e:
+        print("Webhook error:", e, flush=True)
+
+set_webhook()
+
+# ---------- GAME STATS ----------
+def get_game_stats(uid):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM game_stats WHERE user_id=%s", (uid,))
+        row = cur.fetchone()
+        if not row:
+            cur.execute("INSERT INTO game_stats (user_id) VALUES (%s)", (uid,))
+            conn.commit()
+            cur.execute("SELECT * FROM game_stats WHERE user_id=%s", (uid,))
+            row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row
+    except Exception as e:
+        print("get_game_stats error:", e, flush=True)
+        return None
+
+def add_sp(uid, amount, reason):
+    if amount <= 0:
+        return
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO game_stats (user_id, sp) VALUES (%s, %s)
+                       ON CONFLICT (user_id) DO UPDATE SET sp = game_stats.sp + %s""",
+                    (uid, amount, amount))
+        cur.execute("""INSERT INTO sp_log (user_id, amount, reason)
+                       VALUES (%s, %s, %s)""",
+                    (uid, amount, reason))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("add_sp error:", e, flush=True)
+
+def record_game_result(uid, result, difficulty="medium"):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        if result == "win":
+            sp = {"easy": 1, "medium": 3, "hard": 5}.get(difficulty, 3)
+            cur.execute("""INSERT INTO game_stats (user_id, wins, streak)
+                           VALUES (%s, 1, 1)
+                           ON CONFLICT (user_id) DO UPDATE SET
+                           wins = game_stats.wins + 1,
+                           streak = game_stats.streak + 1""", (uid,))
+        elif result == "loss":
+            cur.execute("""INSERT INTO game_stats (user_id, losses, streak)
+                           VALUES (%s, 1, 0)
+                           ON CONFLICT (user_id) DO UPDATE SET
+                           losses = game_stats.losses + 1,
+                           streak = 0""", (uid,))
+        elif result == "draw":
+            cur.execute("""INSERT INTO game_stats (user_id, draws)
+                           VALUES (%s, 1)
+                           ON CONFLICT (user_id) DO UPDATE SET
+                           draws = game_stats.draws + 1""", (uid,))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if result == "win":
+            add_sp(uid, sp, f"tic_tac_toe_{difficulty}_win")
+    except Exception as e:
+        print("record_game_result error:", e, flush=True)
+
+def get_leaderboard(limit=10):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT g.user_id, g.sp, u.first_name, u.username
+                       FROM game_stats g
+                       LEFT JOIN users u ON u.user_id = g.user_id
+                       WHERE g.sp > 0
+                       ORDER BY g.sp DESC LIMIT %s""", (limit,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        print("get_leaderboard error:", e, flush=True)
+        return []
+
+# ---------- TRIVIA SESSIONS ----------
+def get_trivia_sessions_today(uid):
+    today = datetime.date.today()
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT sessions_used FROM daily_trivia
+                       WHERE user_id=%s AND play_date=%s""",
+                    (uid, today))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row["sessions_used"] if row else 0
+    except:
+        return 0
+
+def increment_trivia_session(uid):
+    today = datetime.date.today()
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO daily_trivia (user_id, play_date, sessions_used)
+                       VALUES (%s, %s, 1)
+                       ON CONFLICT DO NOTHING""", (uid, today))
+        cur.execute("""UPDATE daily_trivia SET sessions_used = sessions_used + 1
+                       WHERE user_id=%s AND play_date=%s""", (uid, today))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("increment_trivia error:", e, flush=True)
+
+# ---------- TRIVIA ACTIVE SESSION (database) ----------
+def save_trivia_session(uid, questions, current, score):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""UPDATE daily_trivia SET
+                       questions = %s,
+                       current_q = %s,
+                       score = %s,
+                       in_progress = 1
+                       WHERE user_id=%s AND play_date=%s""",
+                    (json.dumps(questions), current, score, uid, datetime.date.today()))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("save_trivia_session error:", e, flush=True)
+
+def get_active_trivia(uid):
+    today = datetime.date.today()
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT questions, current_q, score, in_progress
+                       FROM daily_trivia
+                       WHERE user_id=%s AND play_date=%s AND in_progress=1""",
+                    (uid, today))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row and row["questions"]:
+            return {
+                "questions": json.loads(row["questions"]),
+                "current": row["current_q"] or 0,
+                "score": row["score"] or 0,
+            }
+        return None
+    except Exception as e:
+        print("get_active_trivia error:", e, flush=True)
+        return None
+
+def clear_active_trivia(uid):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""UPDATE daily_trivia SET in_progress = 0
+                       WHERE user_id=%s AND play_date=%s""",
+                    (uid, datetime.date.today()))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("clear_active_trivia error:", e, flush=True)
+
+# ---------- PREMIUM TEXT ----------
+def premium_text(uid):
+    if uid == ADMIN_ID:
+        return ("👑 *ADMIN ACCOUNT*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "You are the creator of SAVIOUR.\n\n"
+                "✅ Unlimited access to everything\n"
+                "✅ Full admin panel\n\n"
+                "Thank you for building SAVIOUR! 🚀")
+    if is_paid(uid):
+        return ("💎 *PREMIUM ACTIVE*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "✅ Unlimited voice notes\n"
+                "✅ Unlimited lyrics\n"
+                "✅ Unlimited translation\n"
+                "✅ Unlimited PDF tools\n"
+                "✅ Unlimited image tools\n"
+                "✅ Unlimited security checks\n"
+                "✅ Unlimited CV Builder\n"
+                "✅ Unlimited Voice Translator\n"
+                "✅ Unlimited QR codes\n"
+                "✅ Unlimited Auto-Reply\n\n"
+                "Thank you for supporting SAVIOUR!")
+    return (f"💎 *UPGRADE TO PREMIUM*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💰 Price: *{PRICE}*\n\n"
+            "🎁 *You get:*\n"
+            "✅ Unlimited voice notes\n"
+            "✅ Unlimited lyrics\n"
+            "✅ Unlimited translation\n"
+            "✅ Unlimited PDF tools\n"
+            "✅ Unlimited image tools\n"
+            "✅ Unlimited security checks\n"
+            "✅ Unlimited CV Builder\n"
+            "✅ Unlimited Voice Translator\n"
+            "✅ Unlimited QR codes\n"
+            "✅ Unlimited Auto-Reply\n\n"
+            "📋 *How to pay:*\n"
+            f"1. Transfer {PRICE} to:\n"
+            f"   🏦 {PAY_BANK}\n"
+            f"   🔢 {PAY_ACCOUNT}\n"
+            f"   👤 {PAY_NAME}\n\n"
+            f"2. Send receipt to @{CREATOR}\n"
+            "3. Wait for approval")
+
+# ---------- MAIN MENU ----------
+def main_menu(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🎙 Voice", callback_data="voice"),
+        types.InlineKeyboardButton("📝 Lyrics", callback_data="lyrics"),
+        types.InlineKeyboardButton("🔧 Tools", callback_data="tools"),
+        types.InlineKeyboardButton("🎮 Games", callback_data="games"),
+        types.InlineKeyboardButton("📚 My Files", callback_data="myfiles"),
+        types.InlineKeyboardButton("💎 Premium", callback_data="upgrade"),
+        types.InlineKeyboardButton("❓ Help", callback_data="help"),
+    )
+    text = ("👋 *Welcome to SAVIOUR!*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Your everyday helper on Telegram.\n\n"
+            "*What I can do for you:*\n\n"
+            "🎙 Voice notes — turn text into speech\n"
+            "📝 Lyrics — get song lyrics with timestamps\n"
+            "🌍 Translate — 24 languages\n"
+            "📄 PDF — merge, split, compress\n"
+            "🖼 Images — compress, resize, convert\n"
+            "🛡️ Security — check suspicious links\n"
+            "🎮 Games — play and earn SP\n\n"
+            "Tap any button to start 👇\n\n"
+            f"👑 Creator: @{CREATOR}")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+def tools_menu(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🛡️ Security Center", callback_data="security"),
+    )
+    markup.add(
+        types.InlineKeyboardButton("🌍 Translate", callback_data="translate"),
+        types.InlineKeyboardButton("📄 PDF Suite", callback_data="pdf"),
+        types.InlineKeyboardButton("🖼 Image Tools", callback_data="image"),
+        types.InlineKeyboardButton("💬 Auto-Reply", callback_data="reply"),
+        types.InlineKeyboardButton("📝 CV Builder", callback_data="cv"),
+        types.InlineKeyboardButton("🎙 Voice Translate", callback_data="voicetrans"),
+        types.InlineKeyboardButton("🔲 QR Code", callback_data="qr"),
+    )
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+    text = ("🔧 *Tools*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "More powerful tools for daily use.\n\n"
+            "Tap one to begin 👇")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+def games_menu(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("❌ Tic Tac Toe", callback_data="game_ttt"),
+        types.InlineKeyboardButton("🎯 Daily Trivia", callback_data="game_trivia"),
+        types.InlineKeyboardButton("🏆 Leaderboard", callback_data="game_lb"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="menu"),
+    )
+    text = ("🎮 *SAVIOUR Games*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Play, earn SP (SAVIOUR Points), climb the leaderboard.\n\n"
+            "*Games:*\n"
+            "❌ Tic Tac Toe — vs SAVIOUR\n"
+            "🎯 Daily Trivia — 3 sessions/day\n\n"
+            "*Earn SP:*\n"
+            "❌ Easy win: +1 SP\n"
+            "❌ Medium win: +3 SP\n"
+            "❌ Hard win: +5 SP\n"
+            "🎯 Correct answer: +2 SP\n"
+            "🎯 Perfect 5/5: +5 bonus\n\n"
+            "Tap a game to play 👇")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(commands=['start'])
+def start(m):
+    if is_banned(m.from_user.id):
+        bot.send_message(m.chat.id, "🚫 You are banned.")
+        return
+    save_user_meta(m.from_user.id, m.from_user.username, m.from_user.first_name)
+    main_menu(m.chat.id)
+
+# ---------- HELP ----------
+def help_text():
+    return ("❓ *SAVIOUR Help Guide*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*What is SAVIOUR?*\n"
+            "An all-in-one Telegram assistant that saves you time.\n\n"
+            "*Available Tools:*\n\n"
+            "🎙 *Voice Generator*\n"
+            "Turn text into voice notes in 32 voices.\n\n"
+            "📝 *Lyrics Finder*\n"
+            "Get synced lyrics for any song.\n\n"
+            "🌍 *Translator*\n"
+            "Translate between 24 languages.\n\n"
+            "📄 *PDF Suite*\n"
+            "Merge, split, compress, rotate PDFs.\n\n"
+            "🖼 *Image Tools*\n"
+            "Compress, resize, convert images.\n\n"
+            "🛡️ *Security Center*\n"
+            "Check links, screenshots, and learn about scams.\n\n"
+            "📝 *CV Builder*\n"
+            "Create professional CVs with your photo.\n\n"
+            "🎙 *Voice Translator*\n"
+            "Translate voice messages between languages.\n\n"
+            "🔲 *QR Code*\n"
+            "Generate QR codes for links, WiFi, contacts.\n\n"
+            "🎮 *Games*\n"
+            "Tic Tac Toe and Daily Trivia. Earn SP.\n\n"
+            "📚 *My Files*\n"
+            "Access all your past files anytime.\n\n"
+            "💎 *Premium* — " + PRICE + "\n"
+            "Pay to: " + PAY_ACCOUNT + " (" + PAY_BANK + ")\n"
+            "Contact: @" + CREATOR + "\n\n"
+            "*Commands:*\n"
+            "/start — Open main menu\n"
+            "/say text — Generate voice\n"
+            "/lrc song - artist — Get lyrics\n"
+            "/setaway keyword | reply — Auto-reply\n"
+            "/privacy — Privacy policy\n\n"
+            f"👑 Created by: @{CREATOR}")
+
+@bot.message_handler(commands=['help'])
+def help_cmd(m):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📢 Add to Group/Channel", callback_data="setup_guide"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+    bot.send_message(m.chat.id, help_text(), reply_markup=markup, parse_mode="Markdown")
+
+# ---------- PRIVACY ----------
+@bot.message_handler(commands=['privacy'])
+def privacy_cmd(m):
+    bot.reply_to(m,
+        "📜 *SAVIOUR Privacy Policy*\n\n"
+        f"Read it here:\n{PRIVACY_URL}",
+        parse_mode="Markdown")
+
+# ---------- CHANNEL/GROUP SETUP GUIDE ----------
+def setup_guide_text():
+    return ("📢 *Add SAVIOUR to Your Group or Channel*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*👥 FOR GROUPS:*\n\n"
+            "1. Open your group\n"
+            "2. Tap \"Add Members\"\n"
+            "3. Search: @" + bot.get_me().username + "\n"
+            "4. Add it\n"
+            "5. Make it admin (recommended)\n\n"
+            "Then in the group:\n"
+            "→ `/addkeyword word | reply` — add auto-reply\n"
+            "→ `/listkeywords` — see all\n"
+            "→ `/delkeyword word` — remove one\n\n"
+            "*📢 FOR CHANNELS:*\n\n"
+            "1. Open your channel\n"
+            "2. Administrators → Add Admin\n"
+            "3. Search: @" + bot.get_me().username + "\n"
+            "4. Grant \"Post Messages\" permission\n\n"
+            "✅ *That's it!* SAVIOUR will confirm automatically.\n\n"
+            "Then use:\n"
+            "→ `/post Your message` — post now\n"
+            "→ `/schedule 09:00 | Daily post` — schedule\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 *No channel ID needed.*\n"
+            "SAVIOUR detects your channel when you add it.")
+
+# ---------- VOICE PAGES ----------
+def voice_countries_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    btns = []
+    for ckey, cinfo in COUNTRIES.items():
+        count = sum(1 for v in VOICES.values() if v["country"] == ckey)
+        if count > 0:
+            btns.append(types.InlineKeyboardButton(
+                f"{cinfo['flag']} {cinfo['name']}",
+                callback_data=f"vc_{ckey}"))
+    for i in range(0, len(btns), 3):
+        markup.row(*btns[i:i+3])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+
+    current = get_voice_key(uid)
+    if current not in VOICES:
+        current = "ng_male"
+    cur_name = VOICES[current]["label"]
+    cur_country = COUNTRIES[VOICES[current]["country"]]
+
+    text = ("🎙 *Voice Generator*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Turn any text into natural speech.\n\n"
+            "*How to use:*\n"
+            "1. Pick a country below\n"
+            "2. Choose a voice\n"
+            "3. Type your message\n"
+            "4. Get a downloadable MP3\n\n"
+            f"*Current voice:* {cur_country['flag']} *{cur_name}*")
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+def voice_list_page(chat_id, uid, country_key, message_id=None):
+    current = get_voice_key(uid)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btns = []
+    for key, info in VOICES.items():
+        if info["country"] == country_key:
+            label = f"✅ {info['label']}" if key == current else info['label']
+            btns.append(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
+    for i in range(0, len(btns), 2):
+        markup.row(*btns[i:i+2])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="voice"))
+
+    c = COUNTRIES[country_key]
+    text = (f"🎙 *{c['flag']} {c['name']} Voices*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Tap one to select it.\n"
+            "The ✅ shows your current voice.")
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- TRANSLATOR PAGE ----------
+def translate_lang_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btns = []
+    for code, name in TRANS_LANGS.items():
+        btns.append(types.InlineKeyboardButton(name, callback_data=f"tr_{code}"))
+    for i in range(0, len(btns), 2):
+        markup.row(*btns[i:i+2])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+
+    text = ("🌍 *Translator*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Translate text between 24 languages.\n\n"
+            "*How to use:*\n"
+            "1. Pick target language below\n"
+            "2. Type your text\n"
+            "3. Get instant translation\n\n"
+            "*Examples:*\n"
+            "→ \"Good morning\" → French = \"Bonjour\"\n"
+            "→ \"How are you?\" → Yoruba = \"Báwo ni?\"\n"
+            "→ \"Thank you\" → Hausa = \"Na gode\"")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- PDF PAGE ----------
+def pdf_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✂️ Split PDF", callback_data="pdf_split"),
+        types.InlineKeyboardButton("🗜 Compress PDF", callback_data="pdf_compress"),
+        types.InlineKeyboardButton("🔄 Rotate PDF", callback_data="pdf_rotate"),
+        types.InlineKeyboardButton("📸 PDF → Images", callback_data="pdf_pdf2img"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("📄 *PDF Suite*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Work with PDF files quickly.\n\n"
+            "*Available actions:*\n"
+            "✂️ Split — break into pages\n"
+            "🗜 Compress — reduce file size\n"
+            "🔄 Rotate — turn 90°\n"
+            "📸 Convert — extract images\n\n"
+            "⚠️ Max file size: 20 MB\n\n"
+            "Tap an action, then send your PDF.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- IMAGE PAGE ----------
+def image_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🗜 Compress", callback_data="img_compress"),
+        types.InlineKeyboardButton("📐 Resize", callback_data="img_resize"),
+        types.InlineKeyboardButton("🔄 Convert", callback_data="img_convert"),
+        types.InlineKeyboardButton("↩️ Rotate/Flip", callback_data="img_rotate"),
+        types.InlineKeyboardButton("📄 Image → PDF", callback_data="img_pdf"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("🖼 *Image Tools*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Edit images quickly on Telegram.\n\n"
+            "🗜 Compress — smaller file\n"
+            "📐 Resize — 50% smaller\n"
+            "🔄 Convert — to JPG\n"
+            "↩️ Rotate — turn 90°\n"
+            "📄 Convert — Image to PDF\n\n"
+            "⚠️ Max file size: 20 MB\n\n"
+            "Tap an action, then send your image.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- SECURITY PAGE ----------
+def security_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔗 Check Link", callback_data="sec_link"),
+        types.InlineKeyboardButton("📸 Check Screenshot", callback_data="sec_screenshot"),
+        types.InlineKeyboardButton("📚 Scam Alerts", callback_data="sec_scams"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("🛡️ *SAVIOUR Security Center*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Protect yourself from scams and fraud.\n\n"
+            "🔗 *Check Link*\n"
+            "Test any suspicious link before you click.\n\n"
+            "📸 *Check Screenshot*\n"
+            "Analyze payment screenshots for red flags.\n\n"
+            "📚 *Scam Alerts*\n"
+            "See the latest Nigerian scams.\n\n"
+            "⚠️ *Important:*\n"
+            "No tool catches every scam. Always verify "
+            "in your bank app before releasing goods.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
