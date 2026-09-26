@@ -2402,3 +2402,904 @@ def finish_trivia(uid, chat_id):
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
     except:
         bot.send_message(chat_id, text, reply_markup=markup)
+
+# ---------- TRIVIA LOGIC (database-based) ----------
+def start_trivia(uid, chat_id, message_id=None):
+    used = get_trivia_sessions_today(uid)
+    if used >= 3:
+        bot.send_message(chat_id, "❌ No trivia sessions left today. Come back tomorrow!")
+        return
+
+    questions = fetch_trivia_questions()
+    if not questions:
+        bot.send_message(chat_id, "⚠️ Could not load questions. Try again later.")
+        return
+
+    # Save session to database
+    today = datetime.date.today()
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO daily_trivia
+                       (user_id, play_date, sessions_used, questions, current_q, score, total, in_progress)
+                       VALUES (%s, %s, 1, %s, 0, 0, %s, 1)
+                       ON CONFLICT DO NOTHING""",
+                    (uid, today, json.dumps(questions), len(questions)))
+        cur.execute("""UPDATE daily_trivia SET
+                       questions = %s,
+                       current_q = 0,
+                       score = 0,
+                       total = %s,
+                       in_progress = 1
+                       WHERE user_id=%s AND play_date=%s""",
+                    (json.dumps(questions), len(questions), uid, today))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("start_trivia save error:", e, flush=True)
+
+    send_trivia_question(uid, chat_id)
+
+def send_trivia_question(uid, chat_id):
+    active = get_active_trivia(uid)
+    if not active:
+        return
+
+    questions = active["questions"]
+    idx = active["current"]
+    score = active["score"]
+
+    if idx >= len(questions):
+        finish_trivia(uid, chat_id)
+        return
+
+    q = questions[idx]
+    options = q["options"][:4]
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for i, opt in enumerate(options):
+        markup.add(types.InlineKeyboardButton(
+            opt[:60], callback_data=f"triv_ans_{i}"))
+
+    text = (f"🎯 *Question {idx+1}/5*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{q['q'][:300]}\n\n"
+            f"Score: {score}/{idx}")
+
+    try:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+    except:
+        bot.send_message(chat_id, text, reply_markup=markup)
+
+def answer_trivia(uid, chat_id, answer_index, message_id):
+    active = get_active_trivia(uid)
+    if not active:
+        bot.edit_message_text("⚠️ Session expired.", chat_id, message_id)
+        return
+
+    questions = active["questions"]
+    idx = active["current"]
+    score = active["score"]
+
+    if idx >= len(questions):
+        return
+
+    q = questions[idx]
+    correct_answer = q["a"]
+    given = q["options"][answer_index] if answer_index < len(q["options"]) else ""
+
+    if given == correct_answer:
+        score += 1
+        add_sp(uid, 2, "trivia_correct")
+        result = f"✅ *Correct!*\n\nThe answer is: {correct_answer}"
+    else:
+        result = f"❌ *Wrong!*\n\nCorrect answer: {correct_answer}"
+
+    try:
+        bot.edit_message_text(result, chat_id, message_id, parse_mode="Markdown")
+    except:
+        try:
+            bot.edit_message_text(result, chat_id, message_id)
+        except:
+            pass
+
+    # Update database with new progress
+    idx += 1
+    today = datetime.date.today()
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""UPDATE daily_trivia SET current_q=%s, score=%s
+                       WHERE user_id=%s AND play_date=%s""",
+                    (idx, score, uid, today))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("answer_trivia update error:", e, flush=True)
+
+    time.sleep(1)
+    send_trivia_question(uid, chat_id)
+
+def finish_trivia(uid, chat_id):
+    active = get_active_trivia(uid)
+    if not active:
+        return
+
+    questions = active["questions"]
+    score = active["score"]
+    total = len(questions)
+
+    if score == total:
+        add_sp(uid, 5, "trivia_perfect")
+
+    increment_trivia_session(uid)
+    clear_active_trivia(uid)
+
+    text = (f"🎉 *Trivia Complete!*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Score: {score}/{total}\n"
+            f"SP earned: {score * 2}")
+
+    if score == total:
+        text += " + 5 bonus"
+
+    text += "\n\n"
+
+    if score == total:
+        text += "🏆 *PERFECT SCORE!* +5 bonus SP\n\n"
+    text += "Come back tomorrow for more!"
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🏆 Leaderboard", callback_data="game_lb"))
+    markup.add(types.InlineKeyboardButton("⬅️ Games", callback_data="games"))
+
+    try:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+    except:
+        bot.send_message(chat_id, text, reply_markup=markup)
+
+# ---------- BUTTON HANDLER ----------
+@bot.callback_query_handler(func=lambda c: True)
+def handle(c):
+    bot.answer_callback_query(c.id)
+    uid = c.from_user.id
+    chat_id = c.message.chat.id
+    msg_id = c.message.message_id
+
+    if is_banned(uid):
+        return
+
+    if get_maintenance() and uid != ADMIN_ID:
+        bot.send_message(chat_id,
+            "🛠 *SAVIOUR is under maintenance*\n\n"
+            "We're making improvements.\n"
+            "Please try again in a few minutes.",
+            parse_mode="Markdown")
+        return
+
+    data = c.data
+
+    # Menu navigation
+    if data == "menu":
+        main_menu(chat_id, msg_id)
+    elif data == "tools":
+        tools_menu(chat_id, msg_id)
+    elif data == "games":
+        games_menu(chat_id, msg_id)
+    elif data == "voice":
+        set_mode(uid, "voice")
+        voice_countries_page(chat_id, uid, msg_id)
+    elif data.startswith("vc_"):
+        ck = data.replace("vc_", "")
+        if ck in COUNTRIES:
+            voice_list_page(chat_id, uid, ck, msg_id)
+    elif data.startswith("setvoice_"):
+        key = data.replace("setvoice_", "")
+        if key in VOICES:
+            set_voice_key(uid, key)
+            voice_list_page(chat_id, uid, VOICES[key]["country"], msg_id)
+    elif data == "lyrics":
+        set_mode(uid, "lyrics")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text(
+            "📝 *Lyrics Finder*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Get synced lyrics with timestamps.\n\n"
+            "*How to use:*\n"
+            "Type the song name and artist, separated by a dash.\n\n"
+            "*Examples:*\n"
+            "→ `Shape of You - Ed Sheeran`\n"
+            "→ `Blinding Lights - The Weeknd`\n"
+            "→ `Essence - Wizkid`\n\n"
+            "*What you get:*\n"
+            "A `.lrc` file with timestamps — works with Lark Player, "
+            "Poweramp, Musicolet, and more.\n\n"
+            "*Type your song now:*",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif data == "reply":
+        set_mode(uid, "reply")
+        show_auto_reply_page(chat_id, uid, msg_id)
+    elif data == "upgrade":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text(premium_text(uid), chat_id, msg_id,
+            reply_markup=markup, parse_mode="Markdown")
+    elif data == "help":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📢 Add to Group/Channel", callback_data="setup_guide"))
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+        bot.edit_message_text(help_text(), chat_id, msg_id,
+            reply_markup=markup, parse_mode="Markdown")
+    elif data == "setup_guide":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="help"))
+        bot.edit_message_text(setup_guide_text(), chat_id, msg_id,
+            reply_markup=markup, parse_mode="Markdown")
+    elif data == "translate":
+        set_mode(uid, "translate")
+        translate_lang_page(chat_id, uid, msg_id)
+    elif data.startswith("tr_"):
+        code = data.replace("tr_", "")
+        if code in TRANS_LANGS:
+            set_mode(uid, f"tr_{code}")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="translate"))
+            bot.edit_message_text(
+                f"🌍 *Translator*\n\n"
+                f"Target: {TRANS_LANGS[code]}\n\n"
+                f"Type your text to translate 👇",
+                chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif data == "pdf":
+        pdf_page(chat_id, msg_id)
+    elif data == "image":
+        image_page(chat_id, msg_id)
+    elif data == "security":
+        security_page(chat_id, msg_id)
+    elif data == "cv":
+        cv_page(chat_id, uid, msg_id)
+    elif data == "cv_new":
+        # Clear any existing CV data
+        clear_cv_data(uid)
+        set_mode(uid, "cv_photo")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⏭ Skip photo", callback_data="cv_skip_photo"))
+        markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cv"))
+        bot.edit_message_text(
+            "📝 *CV Builder — Step 1 of 13*\n\n"
+            "Send your *profile photo*, or tap Skip.\n\n"
+            "📸 Best size: square, clear face",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif data == "cv_skip_photo":
+        save_cv_data(uid, {"photo_url": None})
+        set_mode(uid, "cv_form")
+        bot.edit_message_text(
+            CV_PROMPTS["name"], chat_id, msg_id, parse_mode="Markdown")
+    elif data == "voicetrans":
+        voicetrans_page(chat_id, uid, msg_id)
+    elif data.startswith("vt_"):
+        code = data.replace("vt_", "")
+        if code in TRANS_LANGS:
+            set_mode(uid, f"vt_{code}")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="voicetrans"))
+            bot.edit_message_text(
+                f"🎙 *Voice Translator*\n\n"
+                f"Target: {TRANS_LANGS[code]}\n\n"
+                f"Send a voice note to translate 👇",
+                chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif data == "qr":
+        qr_page(chat_id, uid, msg_id)
+    elif data.startswith("qr_"):
+        qrtype = data.replace("qr_", "")
+        set_mode(uid, f"qr_{qrtype}")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="qr"))
+        prompts = {
+            "qr_link": "🔗 Send the URL for the QR code.\n\nExample: `https://example.com`",
+            "qr_wifi": "📶 Send WiFi details:\n\n`WiFiName | Password`\n\nExample: `MyWiFi | 12345678`",
+            "qr_vcard": "👤 Send your details:\n\n`Name | Phone | Email`\n\nExample: `John Doe | 08012345678 | john@example.com`",
+            "qr_text": "📝 Send the text to encode.",
+        }
+        bot.edit_message_text(prompts.get(qrtype, "Send your details"),
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif data == "myfiles":
+        my_files_page(chat_id, uid, msg_id)
+    elif data.startswith("mf_"):
+        ftype = data.replace("mf_", "")
+        my_files_list(chat_id, uid, ftype, msg_id)
+    elif data == "sec_link":
+        set_mode(uid, "sec_link")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="security"))
+        bot.edit_message_text(
+            "🔗 *Link Checker*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Send any link to check if it's safe.\n\n"
+            "*I check:*\n"
+            "• Phishing databases\n"
+            "• Malware databases\n"
+            "• Shortened links (followed)\n\n"
+            "*Examples:*\n"
+            "→ `opay-verify.xyz`\n"
+            "→ `bit.ly/abc123`\n\n"
+            "Send a link now 👇",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif data == "sec_screenshot":
+        set_mode(uid, "sec_screenshot")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="security"))
+        bot.edit_message_text(
+            "📸 *Screenshot Checker*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Send a payment screenshot to check for red flags.\n\n"
+            "*What I check:*\n"
+            "• Unusual text patterns\n"
+            "• 'Pending' status\n"
+            "• Common scam phrases\n\n"
+            "⚠️ I can only FLAG suspicious signs.\n"
+            "Always verify in your bank app.\n\n"
+            "Send a screenshot now 👇",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    elif data == "sec_scams":
+        show_scams(chat_id, msg_id)
+    elif data.startswith("scampage_"):
+        page = int(data.replace("scampage_", ""))
+        show_scams(chat_id, msg_id, page)
+    elif data.startswith("pdf_") or data.startswith("img_"):
+        set_mode(uid, data)
+        instruction = {
+            "pdf_split": "Send a PDF to split into pages",
+            "pdf_compress": "Send a PDF to compress",
+            "pdf_rotate": "Send a PDF to rotate 90°",
+            "pdf_pdf2img": "Send a PDF to extract images",
+            "img_compress": "Send an image to compress",
+            "img_resize": "Send an image to resize to 50%",
+            "img_convert": "Send an image to convert to JPG",
+            "img_rotate": "Send an image to rotate 90°",
+            "img_pdf": "Send an image to convert to PDF",
+        }.get(data, "Send your file")
+        markup = types.InlineKeyboardMarkup()
+        back_target = "pdf" if data.startswith("pdf_") else "image"
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data=back_target))
+        bot.edit_message_text(
+            f"✅ *Ready*\n\n{instruction}",
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+    # Games
+    elif data == "game_ttt":
+        ttt_page(chat_id, uid, msg_id)
+    elif data == "ttt_bot_menu":
+        ttt_bot_menu(chat_id, msg_id)
+    elif data.startswith("ttt_new_bot_"):
+        difficulty = data.replace("ttt_new_bot_", "")
+        game_id = create_ttt_game(uid, True, difficulty)
+        if not game_id:
+            bot.send_message(chat_id, "⚠️ Could not create game.")
+            return
+        game = get_ttt_game(game_id)
+        render_ttt(chat_id, game, msg_id)
+    elif data.startswith("ttt_move_"):
+        parts = data.replace("ttt_move_", "").split("_")
+        game_id = parts[0] + "_" + parts[1]
+        pos = int(parts[2])
+        process_ttt_move(uid, chat_id, game_id, pos, msg_id)
+    elif data.startswith("ttt_forfeit_"):
+        game_id = data.replace("ttt_forfeit_", "")
+        game = get_ttt_game(game_id)
+        if game:
+            update_ttt_game(game_id, game["board"], game["turn"], "forfeit", 0)
+            record_game_result(uid, "loss", game["difficulty"])
+            bot.edit_message_text("🏳️ You forfeited.", chat_id, msg_id)
+    elif data.startswith("ttt_again_"):
+        difficulty = data.replace("ttt_again_", "")
+        game_id = create_ttt_game(uid, True, difficulty)
+        game = get_ttt_game(game_id)
+        render_ttt(chat_id, game, msg_id)
+    elif data == "ttt_stats":
+        stats = get_game_stats(uid)
+        text = (f"📊 *Your Tic Tac Toe Stats*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"🏅 SP: {stats['sp']}\n"
+                f"✅ Wins: {stats['wins']}\n"
+                f"❌ Losses: {stats['losses']}\n"
+                f"🤝 Draws: {stats['draws']}\n"
+                f"🔥 Current Streak: {stats['streak']}\n"
+                f"⭐ Best Streak: {stats['best_streak']}")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="game_ttt"))
+        bot.edit_message_text(text, chat_id, msg_id,
+            reply_markup=markup, parse_mode="Markdown")
+    elif data == "game_trivia":
+        trivia_page(chat_id, uid, msg_id)
+    elif data == "trivia_start":
+        start_trivia(uid, chat_id, msg_id)
+    elif data == "trivia_continue":
+        send_trivia_question(uid, chat_id)
+    elif data.startswith("triv_ans_"):
+        idx = int(data.replace("triv_ans_", ""))
+        answer_trivia(uid, chat_id, idx, msg_id)
+    elif data == "game_lb":
+        leaderboard_page(chat_id, uid, msg_id)
+    # Auto-Reply toggle
+    elif data == "ar_off":
+        set_auto_reply(uid, 0)
+        show_auto_reply_page(chat_id, uid, msg_id)
+    elif data == "ar_on":
+        set_auto_reply(uid, 1)
+        show_auto_reply_page(chat_id, uid, msg_id)
+
+def set_auto_reply(uid, value):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET auto_reply_enabled=%s WHERE user_id=%s",
+                    (value, uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("set_auto_reply error:", e, flush=True)
+
+def show_auto_reply_page(chat_id, uid, message_id=None):
+    allowed, status = can_use_auto_reply(uid)
+    enabled = is_auto_reply_enabled(uid)
+
+    if not allowed:
+        text = ("💬 *Auto-Reply (Business)*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "🔒 *Premium Feature*\n\n"
+                "Your 48-hour free trial has ended.\n\n"
+                "Upgrade to Premium to continue using Auto-Reply.\n\n"
+                f"💎 *{PRICE}*\n"
+                f"Pay to: {PAY_ACCOUNT} ({PAY_BANK})\n"
+                f"Contact: @{CREATOR}")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("💎 Upgrade", callback_data="upgrade"))
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+    else:
+        status_line = ""
+        if status == "trial":
+            status_line = "🆓 Free trial just started!"
+        elif status.startswith("trial_"):
+            status_line = f"🆓 Free trial: {status.replace('trial_', '')}"
+        elif status == "premium":
+            status_line = "💎 Premium user"
+        elif status == "admin":
+            status_line = "👑 Admin account"
+
+        state_line = "✅ *ON*" if enabled else "❌ *OFF*"
+
+        keywords = get_away_keywords(uid)
+        kw_text = "\n".join([f"• `{k['keyword']}` → {k['reply'][:30]}"
+                            for k in keywords]) or "_No keywords yet_"
+
+        text = ("💬 *Auto-Reply (Business)*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "When a customer DMs your Telegram Business, "
+                "the bot replies automatically.\n\n"
+                f"Status: {state_line}\n"
+                f"{status_line}\n\n"
+                f"*Keywords set:*\n{kw_text}\n\n"
+                "*Commands:*\n"
+                "`/setaway keyword | reply` — add\n"
+                "`/editaway keyword | new reply` — edit\n"
+                "`/delaway keyword` — delete one\n"
+                "`/awaylist` — list all\n"
+                "`/clearaway` — remove all")
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        if enabled:
+            markup.add(types.InlineKeyboardButton("❌ Turn OFF", callback_data="ar_off"))
+        else:
+            markup.add(types.InlineKeyboardButton("✅ Turn ON", callback_data="ar_on"))
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+
+    if message_id:
+        try:
+            bot.edit_message_text(text, chat_id, message_id,
+                reply_markup=markup, parse_mode="Markdown")
+        except:
+            bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- SHOW SCAMS ----------
+def show_scams(chat_id, message_id=None, page=0):
+    scams = get_scam_alerts()
+    if not scams:
+        text = "📚 No scam alerts yet."
+        if message_id:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, text, parse_mode="Markdown")
+        return
+
+    per_page = 3
+    total_pages = (len(scams) + per_page - 1) // per_page
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * per_page
+    end = start + per_page
+    page_items = scams[start:end]
+
+    text = f"📚 *Scam Alerts* ({page+1}/{total_pages})\n"
+    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    for s in page_items:
+        text += f"⚠️ *{s['title']}*\n{s['description']}\n\n"
+
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    nav = []
+    if page > 0:
+        nav.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"scampage_{page-1}"))
+    if page < total_pages - 1:
+        nav.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"scampage_{page+1}"))
+    if nav:
+        markup.row(*nav)
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="security"))
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- VOICE ----------
+def make_voice_note(uid, chat_id, text):
+    if not can_use(uid, "voice"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_VOICE_LIMIT} voice notes/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+    voice = get_voice(uid)
+    bot.send_message(chat_id, "🎙 Generating voice...")
+
+    async def _make():
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save("voice.mp3")
+
+    try:
+        asyncio.run(_make())
+
+        safe_text = text[:40].strip()
+        for ch in ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n']:
+            safe_text = safe_text.replace(ch, '_')
+        if not safe_text:
+            safe_text = f"voice_{int(time.time())}"
+        filename = f"{safe_text}.mp3"
+
+        cloud_url = upload_to_cloud("voice.mp3",
+            resource_type="video", folder="saviour/voice")
+
+        with open("voice.mp3", "rb") as f:
+            bot.send_document(chat_id, f,
+                visible_file_name=filename,
+                caption="🎙 Tap to play, long-press to save")
+
+        if cloud_url:
+            save_file_record(uid, "voice", filename, cloud_url)
+
+        bump(uid, "voice")
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Error: {e}")
+
+# ---------- LYRICS (LARK PLAYER FIX) ----------
+def send_lrc(uid, chat_id, query):
+    if not can_use(uid, "lyrics"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_LYRICS_LIMIT} lyrics/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+    bot.send_message(chat_id, "🔎 Searching lyrics...")
+    try:
+        r = requests.get("https://lrclib.net/api/search",
+                         params={"q": query}, timeout=15)
+        data = r.json()
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Search error: {e}")
+        return
+    if not data:
+        bot.send_message(chat_id, "❌ No lyrics found.")
+        return
+    song = None
+    for item in data:
+        if item.get("syncedLyrics"):
+            song = item
+            break
+    if not song:
+        bot.send_message(chat_id, "⚠️ No synced lyrics available.")
+        return
+
+    raw = song["syncedLyrics"].strip()
+
+    lrc_lines = []
+    lrc_lines.append(f"[ti:{song['trackName']}]")
+    lrc_lines.append(f"[ar:{song['artistName']}]")
+    if song.get("albumName"):
+        lrc_lines.append(f"[al:{song['albumName']}]")
+    lrc_lines.append("[by:SAVIOUR Bot]")
+    lrc_lines.append("[offset:0]")
+    lrc_lines.append("")
+    lrc_lines.append(raw)
+    lrc_content = "\n".join(lrc_lines)
+
+    filename = f"{song['artistName']} - {song['trackName']}.lrc".replace("/", "-")
+
+    # Plain UTF-8 WITHOUT BOM — fixes Lark Player "invalid" error
+    data_bytes = lrc_content.encode("utf-8")
+    file_bytes = io.BytesIO(data_bytes)
+    file_bytes.name = filename
+
+    bot.send_document(chat_id, file_bytes,
+        caption=f"🎤 {song['trackName']} — {song['artistName']}\n\n"
+                f"✅ Rename to match your song file\n"
+                f"✅ Works with Lark Player, Poweramp, Musicolet")
+
+    try:
+        with open("temp_lrc.lrc", "wb") as f:
+            f.write(data_bytes)
+        cloud_url = upload_to_cloud("temp_lrc.lrc",
+            resource_type="raw", folder="saviour/lyrics")
+        if cloud_url:
+            save_file_record(uid, "lyrics", filename, cloud_url)
+    except Exception as e:
+        print("Lyrics upload error:", e, flush=True)
+
+    bump(uid, "lyrics")
+
+# ---------- TRANSLATE (with retry) ----------
+def do_translate(uid, chat_id, text, target_code):
+    if not can_use(uid, "translate"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_TRANSLATE_LIMIT} translations/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+    bot.send_message(chat_id, "🌍 Translating...")
+
+    translated = None
+    for attempt in range(3):
+        try:
+            time.sleep(2)
+            translated = GoogleTranslator(source="auto", target=target_code).translate(text)
+            break
+        except Exception as e:
+            err = str(e)
+            if "Too many requests" in err or "429" in err:
+                if attempt < 2:
+                    time.sleep(10)
+                    continue
+                bot.send_message(chat_id,
+                    "⚠️ *Translation service is busy*\n\n"
+                    "Please try again in a few minutes.",
+                    parse_mode="Markdown")
+                return
+            else:
+                bot.send_message(chat_id, f"⚠️ Translation error: {e}")
+                return
+
+    if not translated:
+        return
+
+    result = (f"🌍 *Translation*\n"
+              f"━━━━━━━━━━━━━━━━━━━━\n\n"
+              f"📝 *Original:*\n{text[:500]}\n\n"
+              f"✅ *{TRANS_LANGS.get(target_code, target_code)}:*\n{translated[:500]}")
+    bot.send_message(chat_id, result, parse_mode="Markdown")
+    bump(uid, "translate")
+
+# ---------- SECURITY: LINK CHECKER (FIXED) ----------
+def extract_domain(url):
+    try:
+        if "://" in url:
+            domain = url.split("://")[1].split("/")[0]
+        else:
+            domain = url.split("/")[0]
+        return domain.lower()
+    except:
+        return url.lower()
+
+def follow_redirect(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.head(url, allow_redirects=True, timeout=10, headers=headers)
+        return r.url
+    except:
+        try:
+            r = requests.get(url, allow_redirects=True, timeout=10,
+                             headers={"User-Agent": "Mozilla/5.0"},
+                             stream=True)
+            return r.url
+        except:
+            return url
+
+SHORTENERS = ["bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly",
+              "is.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at"]
+
+def check_link(uid, chat_id, url):
+    if not can_use(uid, "security"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_SECURITY_LIMIT} checks/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+
+    bot.send_message(chat_id, "🔍 Checking link...")
+
+    clean = url.strip()
+    if not clean.startswith("http"):
+        clean = "http://" + clean
+
+    # Follow shorteners
+    real_url = clean
+    original_domain = extract_domain(clean)
+    if any(s in original_domain for s in SHORTENERS):
+        real_url = follow_redirect(clean)
+
+    domain = extract_domain(real_url)
+    domain_no_www = domain.replace("www.", "")
+
+    # Check cache
+    cached = get_cached_link(real_url)
+    if cached:
+        bot.send_message(chat_id, cached, parse_mode="Markdown")
+        return
+
+    danger_score = 0
+    reason = ""
+
+    # PhishStats
+    if PHISHSTATS_KEY:
+        try:
+            r = requests.get(
+                "https://api.phishstats.info/api/phishing",
+                params={"_where": f"url LIKE '%{domain_no_www}%'", "_size": 1},
+                headers={"API-Key": PHISHSTATS_KEY},
+                timeout=10
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if data and len(data) > 0:
+                    score = data[0].get("score", 0)
+                    if score >= 6:
+                        danger_score = 10
+                        reason = "Phishing database match"
+                    elif score >= 4:
+                        danger_score = 5
+                        reason = "Suspicious pattern"
+        except Exception as e:
+            print("PhishStats error:", e, flush=True)
+
+    # URLhaus
+    if danger_score < 6:
+        try:
+            r = requests.post(
+                "https://urlhaus-api.abuse.ch/v1/url/",
+                data={"url": real_url},
+                timeout=10
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("query_status") == "ok":
+                    danger_score = 10
+                    reason = "Malware detected"
+        except Exception as e:
+            print("URLhaus error:", e, flush=True)
+
+    # Build response
+    if danger_score >= 6:
+        verdict = "⚠️ *DANGEROUS*"
+        advice = ("Do NOT enter any personal information.\n"
+                  "Do NOT send money.\n"
+                  "Verify with the official app instead.")
+    elif danger_score >= 4:
+        verdict = "❓ *SUSPICIOUS*"
+        advice = ("Be careful. This link shows some warning signs.\n"
+                  "Only proceed if you trust the source.")
+    else:
+        verdict = "✅ *No threats found*"
+        advice = ("Still be careful with:\n"
+                  "• Requests for passwords or OTPs\n"
+                  "• Urgent payment demands\n"
+                  "• Too-good-to-be-true offers")
+
+    result_text = f"🔗 *Link Check Result*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    result_text += f"URL: `{clean[:80]}`\n"
+    if real_url != clean:
+        result_text += f"→ Redirects to: `{real_url[:80]}`\n"
+    result_text += f"Domain: `{domain_no_www}`\n\n"
+    result_text += f"{verdict}\n\n{advice}"
+
+    if reason:
+        result_text += f"\n\n_Reason: {reason}_"
+
+    bot.send_message(chat_id, result_text, parse_mode="Markdown")
+    cache_link(real_url, result_text)
+    bump(uid, "security")
+
+# ---------- SECURITY: SCREENSHOT CHECKER ----------
+def check_screenshot(uid, chat_id, file_id):
+    if not can_use(uid, "security"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_SECURITY_LIMIT} checks/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+
+    bot.send_message(chat_id, "🔍 Analyzing screenshot...")
+
+    try:
+        info = bot.get_file(file_id)
+        downloaded = bot.download_file(info.file_path)
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Download failed: {e}")
+        return
+
+    try:
+        img = Image.open(io.BytesIO(downloaded))
+        img.save("screenshot.png")
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Invalid image: {e}")
+        return
+
+    text = ""
+    try:
+        import pytesseract
+        text = pytesseract.image_to_string(img)
+    except Exception as e:
+        print("Tesseract error:", e, flush=True)
+        bot.send_message(chat_id,
+            "⚠️ *Screenshot reader unavailable*\n\n"
+            "Please try again later.",
+            parse_mode="Markdown")
+        return
+
+    if not text.strip():
+        bot.send_message(chat_id,
+            "🤔 Couldn't read text from this screenshot.\n\n"
+            "Try a clearer image.",
+            parse_mode="Markdown")
+        return
+
+    text_low = text.lower()
+    flags = []
+
+    if "pending" in text_low or "processing" in text_low:
+        flags.append("⚠️ 'Pending' or 'Processing' status — money not yet received")
+
+    if "initiated" in text_low:
+        flags.append("⚠️ 'Initiated' — not yet completed")
+
+    if "reverse" in text_low or "reversal" in text_low:
+        flags.append("⚠️ Reversal mentioned — verify in your bank")
+
+    banks = ["opay", "palmpay", "gtbank", "access", "zenith", "uba", "first bank"]
+    found_bank = any(b in text_low for b in banks)
+
+    if not found_bank:
+        flags.append("⚠️ No recognized bank name found")
+
+    result = "📸 *Screenshot Check*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+
+    if flags:
+        result += "*Red flags found:*\n"
+        for f in flags:
+            result += f"{f}\n"
+        result += "\n⚠️ *This could be a fake screenshot.*\n"
+        result += "*Verify in your bank app before releasing goods.*"
+    else:
+        result += "✅ *No obvious red flags found*\n\n"
+        result += "⚠️ No tool catches every fake.\n"
+        result += "Always verify the money in your bank app."
+
+    result += f"\n\n📝 *Text detected:*\n`{text[:200]}`"
+
+    bot.send_message(chat_id, result, parse_mode="Markdown")
+    bump(uid, "security")
