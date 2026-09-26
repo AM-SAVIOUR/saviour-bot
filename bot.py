@@ -4328,3 +4328,302 @@ def schedule_cmd(m):
     for ch in channels:
         add_scheduled(ch["channel_id"], time_part.strip(), msg.strip())
     bot.reply_to(m, f"✅ Scheduled for {time_part.strip()} daily.")
+
+# ---------- CHANNEL/GROUP AUTO-DETECT ----------
+@bot.my_chat_member_handler(func=lambda u: True)
+def on_my_chat_member(update):
+    try:
+        chat = update.chat
+        new_status = update.new_chat_member.status
+        old_status = update.old_chat_member.status
+
+        # Only handle when bot is ADDED (was left/kicked, now member/admin)
+        added = (old_status in ["left", "kicked"] and
+                 new_status in ["member", "administrator"])
+
+        if not added:
+            return
+
+        # Bot added to a CHANNEL
+        if chat.type == "channel":
+            owner_id = update.from_user.id if update.from_user else None
+            if not owner_id:
+                return
+
+            save_channel_direct(owner_id, str(chat.id), chat.title or "My Channel")
+            print(f"Channel added: {chat.id} by {owner_id}", flush=True)
+
+            try:
+                bot.send_message(owner_id,
+                    f"✅ *SAVIOUR added to your channel!*\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📢 Channel: {chat.title}\n"
+                    f"🆔 ID: `{chat.id}`\n\n"
+                    f"You can now:\n"
+                    f"→ `/post Your message` — post now\n"
+                    f"→ `/schedule 09:00 | Daily post` — schedule\n\n"
+                    f"⚠️ Make sure SAVIOUR has \"Post Messages\" permission.",
+                    parse_mode="Markdown")
+            except Exception as e:
+                print(f"Could not DM owner: {e}", flush=True)
+
+        # Bot added to a GROUP
+        elif chat.type in ["group", "supergroup"]:
+            owner_id = update.from_user.id if update.from_user else None
+            if not owner_id:
+                return
+
+            print(f"Group added: {chat.id} by {owner_id}", flush=True)
+
+            try:
+                bot.send_message(owner_id,
+                    f"✅ *SAVIOUR added to your group!*\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"👥 Group: {chat.title}\n\n"
+                    f"To set up auto-replies, use in the group:\n"
+                    f"→ `/addkeyword word | reply`\n"
+                    f"→ `/listkeywords` — see all\n"
+                    f"→ `/delkeyword word` — remove one\n\n"
+                    f"💡 Only group admins can add keywords.",
+                    parse_mode="Markdown")
+            except Exception as e:
+                print(f"Could not DM owner: {e}", flush=True)
+
+        # Bot REMOVED from channel/group
+        elif old_status in ["member", "administrator"] and new_status in ["left", "kicked"]:
+            if chat.type == "channel":
+                try:
+                    conn = db()
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM channels WHERE channel_id=%s",
+                                (str(chat.id),))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    print(f"Channel removed: {chat.id}", flush=True)
+                except Exception as e:
+                    print(f"Channel delete error: {e}", flush=True)
+
+    except Exception as e:
+        print("my_chat_member error:", e, flush=True)
+
+# ---------- GROUP HANDLER ----------
+@bot.message_handler(content_types=['text'],
+                     func=lambda m: m.chat.type in ['group', 'supergroup'])
+def group_handler(m):
+    if not m.text:
+        return
+    text = m.text.strip()
+
+    if text.startswith("/addkeyword"):
+        if m.from_user.id != ADMIN_ID and not is_group_admin(m.chat.id, m.from_user.id):
+            bot.reply_to(m, "⛔ Only group admins can add keywords.")
+            return
+        parts = text.replace("/addkeyword", "", 1).strip()
+        if "|" not in parts:
+            bot.reply_to(m, "Usage: `/addkeyword word | reply`", parse_mode="Markdown")
+            return
+        keyword, reply = parts.split("|", 1)
+        add_group_keyword(m.chat.id, m.from_user.id, keyword.strip(), reply.strip())
+        bot.reply_to(m, f"✅ Keyword `{keyword.strip()}` added.", parse_mode="Markdown")
+        return
+
+    if text.startswith("/delkeyword"):
+        if m.from_user.id != ADMIN_ID and not is_group_admin(m.chat.id, m.from_user.id):
+            bot.reply_to(m, "⛔ Only admins.")
+            return
+        kw = text.replace("/delkeyword", "", 1).strip()
+        if delete_group_keyword(m.chat.id, kw):
+            bot.reply_to(m, f"✅ Keyword `{kw}` deleted.", parse_mode="Markdown")
+        else:
+            bot.reply_to(m, f"⚠️ Not found.", parse_mode="Markdown")
+        return
+
+    if text.startswith("/listkeywords"):
+        kws = get_group_keywords(m.chat.id)
+        if not kws:
+            bot.reply_to(m, "No keywords set.")
+            return
+        out = "📋 *Keywords:*\n\n"
+        for k in kws:
+            out += f"• `{k['keyword']}` → {k['reply'][:50]}\n"
+        bot.reply_to(m, out, parse_mode="Markdown")
+        return
+
+    if text.startswith("/help") or text.startswith("/start"):
+        bot.reply_to(m,
+            "👋 SAVIOUR is active in this group.\n\n"
+            "Add auto-replies:\n"
+            "`/addkeyword word | reply`\n\n"
+            "See all:\n"
+            "`/listkeywords`",
+            parse_mode="Markdown")
+        return
+
+    if text.startswith("/"):
+        return
+
+    reply = find_group_reply(m.chat.id, text)
+    if reply:
+        bot.reply_to(m, reply)
+
+def is_group_admin(chat_id, user_id):
+    try:
+        member = bot.get_chat_member(chat_id, user_id)
+        return member.status in ["administrator", "creator"]
+    except:
+        return False
+
+# ---------- NEW MEMBER WELCOME ----------
+@bot.message_handler(content_types=['new_chat_members'])
+def welcome_new_members(m):
+    try:
+        settings = get_group_settings(m.chat.id)
+        if settings.get("welcome_enabled") != 1:
+            return
+
+        welcome_text = settings.get("welcome_text") or "Welcome to the group!"
+
+        for member in m.new_chat_members:
+            if member.is_bot:
+                continue
+            name = member.first_name or "friend"
+            bot.send_message(m.chat.id, f"👋 {name}, {welcome_text}")
+    except Exception as e:
+        print("Welcome error:", e, flush=True)
+
+# ---------- FILE HANDLER ----------
+@bot.message_handler(content_types=['document', 'photo', 'voice'])
+def handle_file(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+
+    mode = get_mode(uid)
+
+    if m.content_type == 'voice':
+        if mode.startswith("vt_"):
+            target = mode.replace("vt_", "")
+            handle_voice_translate(uid, m.chat.id, m.voice.file_id, target)
+        return
+
+    if m.content_type == 'document':
+        file_id = m.document.file_id
+        file_name = m.document.file_name or "file"
+    else:
+        file_id = m.photo[-1].file_id
+        file_name = f"photo_{int(time.time())}.jpg"
+
+    if mode == "sec_screenshot":
+        check_screenshot(uid, m.chat.id, file_id)
+        return
+
+    if mode == "cv_photo":
+        handle_cv_photo(uid, m.chat.id, file_id)
+        return
+
+    if mode.startswith("pdf_") or mode.startswith("img_"):
+        handle_pdf_image(uid, m.chat.id, mode, file_id, file_name)
+    else:
+        bot.reply_to(m, "Tap /start → Tools to use this file.")
+
+# ---------- MAIN HANDLER ----------
+@bot.message_handler(func=lambda m: True)
+def handle_message(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+
+    if get_maintenance() and uid != ADMIN_ID:
+        bot.reply_to(m,
+            "🛠 *SAVIOUR is under maintenance*\n\n"
+            "We're making improvements.\n"
+            "Please try again in a few minutes.",
+            parse_mode="Markdown")
+        return
+
+    if m.chat.type in ['group', 'supergroup']:
+        return
+
+    text = (m.text or "").strip()
+    if not text:
+        return
+
+    if text.startswith("/"):
+        return
+
+    save_user_meta(uid, m.from_user.username, m.from_user.first_name)
+    mode = get_mode(uid)
+
+    if mode == "lyrics":
+        send_lrc(uid, m.chat.id, text)
+    elif mode.startswith("tr_"):
+        target = mode.replace("tr_", "")
+        do_translate(uid, m.chat.id, text, target)
+    elif mode == "translate":
+        bot.reply_to(m, "Pick a language first from the Translator menu.")
+    elif mode == "cv_photo":
+        bot.reply_to(m, "Please send a photo, or tap Skip.")
+    elif mode == "cv_form":
+        handle_cv_step(uid, m.chat.id, text)
+    elif mode == "sec_link":
+        check_link(uid, m.chat.id, text)
+    elif mode.startswith("qr_"):
+        generate_qr(uid, m.chat.id, mode, text)
+    elif mode == "voice":
+        make_voice_note(uid, m.chat.id, text)
+    else:
+        make_voice_note(uid, m.chat.id, text)
+
+# ---------- WEBHOOK ----------
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    try:
+        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+        bot.process_new_updates([update])
+    except Exception as e:
+        print("Webhook error:", e, flush=True)
+    return "ok", 200
+
+@app.route("/")
+def index():
+    return "SAVIOUR is running", 200
+
+# ---------- SCHEDULED POSTS LOOP ----------
+import threading
+
+def scheduled_posts_loop():
+    while True:
+        try:
+            now = datetime.datetime.now().strftime("%H:%M")
+            posts = get_scheduled()
+            for post in posts:
+                if post["post_time"] == now:
+                    try:
+                        bot.send_message(post["channel_id"], post["message"])
+                        print(f"Scheduled post sent to {post['channel_id']}", flush=True)
+                    except Exception as e:
+                        print(f"Scheduled post failed: {e}", flush=True)
+            time.sleep(60)
+        except Exception as e:
+            print("Scheduler error:", e, flush=True)
+            time.sleep(60)
+
+def get_scheduled():
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT id, channel_id, post_time, message FROM scheduled WHERE active=1")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except:
+        return []
+
+threading.Thread(target=scheduled_posts_loop, daemon=True).start()
+
+# ---------- RUN ----------
+if __name__ == "__main__":
+    print("Starting SAVIOUR...", flush=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
