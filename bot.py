@@ -3303,3 +3303,1028 @@ def check_screenshot(uid, chat_id, file_id):
 
     bot.send_message(chat_id, result, parse_mode="Markdown")
     bump(uid, "security")
+
+# ---------- CV BUILDER (database-based) ----------
+CV_FIELDS = ["name", "phone", "email", "location", "title", "summary",
+             "experience", "education", "skills", "certifications",
+             "languages", "referees"]
+
+CV_PROMPTS = {
+    "name": ("📝 *CV Builder — Step 2 of 13*\n\n"
+             "Type your *full name*:\n\n"
+             "*Example:* John Doe Okonkwo"),
+    "phone": ("📝 *Step 3 of 13*\n\n"
+              "Type your *phone number*:\n\n"
+              "*Example:* 08012345678"),
+    "email": ("📝 *Step 4 of 13*\n\n"
+              "Type your *email address*:\n\n"
+              "*Example:* john@example.com"),
+    "location": ("📝 *Step 5 of 13*\n\n"
+                 "Type your *location*:\n\n"
+                 "*Example:* Lagos, Nigeria"),
+    "title": ("📝 *Step 6 of 13*\n\n"
+              "Type your *professional title*:\n\n"
+              "*Example:* Software Developer"),
+    "summary": ("📝 *Step 7 of 13*\n\n"
+                "Write a short *professional summary* (2-3 sentences):\n\n"
+                "*Example:* Experienced software developer with 5 years "
+                "building web applications. Skilled in Python and JavaScript."),
+    "experience": ("📝 *Step 8 of 13*\n\n"
+                   "List your *work experience*:\n\n"
+                   "Format: Job Title | Company | Years\n"
+                   "Separate multiple with new lines.\n\n"
+                   "*Example:*\n"
+                   "Sales Rep | XYZ Ltd | 2020-2022\n"
+                   "Manager | ABC Corp | 2022-Present"),
+    "education": ("📝 *Step 9 of 13*\n\n"
+                  "List your *education*:\n\n"
+                  "Format: Degree | School | Years\n\n"
+                  "*Example:*\n"
+                  "BSc Computer Science | University of Lagos | 2015-2019"),
+    "skills": ("📝 *Step 10 of 13*\n\n"
+               "List your *skills* (comma separated):\n\n"
+               "*Example:* Python, Excel, Communication, Teamwork"),
+    "certifications": ("📝 *Step 11 of 13*\n\n"
+                       "List any *certifications*:\n\n"
+                       "*Example:* Google Data Analytics (2023)\n"
+                       "Or type `skip` if none"),
+    "languages": ("📝 *Step 12 of 13*\n\n"
+                  "List *languages* you speak:\n\n"
+                  "*Example:* English (fluent), Yoruba (native), French (basic)"),
+    "referees": ("📝 *Step 13 of 13*\n\n"
+                 "List *referees*:\n\n"
+                 "Format: Name | Position | Contact\n\n"
+                 "*Example:* Dr. Jane Doe | Professor, UNILAG | jane@unilag.edu\n"
+                 "Or type `skip` if none"),
+}
+
+def save_cv_data(uid, data):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET cv_data=%s WHERE user_id=%s",
+                    (json.dumps(data), uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("save_cv_data error:", e, flush=True)
+
+def get_cv_data(uid):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT cv_data FROM users WHERE user_id=%s", (uid,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row and row["cv_data"]:
+            return json.loads(row["cv_data"])
+        return None
+    except Exception as e:
+        print("get_cv_data error:", e, flush=True)
+        return None
+
+def clear_cv_data(uid):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET cv_data=NULL WHERE user_id=%s", (uid,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("clear_cv_data error:", e, flush=True)
+
+def handle_cv_photo(uid, chat_id, file_id):
+    try:
+        info = bot.get_file(file_id)
+        downloaded = bot.download_file(info.file_path)
+
+        img = Image.open(io.BytesIO(downloaded))
+        size = min(img.size)
+        left = (img.width - size) // 2
+        top = (img.height - size) // 2
+        img = img.crop((left, top, left + size, top + size))
+        img = img.resize((300, 300))
+        img.save("cv_photo.png")
+
+        cloud_url = upload_to_cloud("cv_photo.png",
+            resource_type="image", folder="saviour/cv_photos")
+
+        try:
+            conn = db()
+            cur = conn.cursor()
+            cur.execute("""INSERT INTO user_photos (user_id, cloud_url)
+                           VALUES (%s, %s)
+                           ON CONFLICT (user_id) DO UPDATE SET
+                           cloud_url=%s, uploaded=NOW()""",
+                        (uid, cloud_url, cloud_url))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except:
+            pass
+
+        save_cv_data(uid, {"photo_url": cloud_url})
+        set_mode(uid, "cv_form")
+        bot.send_message(chat_id, CV_PROMPTS["name"], parse_mode="Markdown")
+
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Photo error: {e}")
+        save_cv_data(uid, {"photo_url": None})
+        set_mode(uid, "cv_form")
+        bot.send_message(chat_id, CV_PROMPTS["name"], parse_mode="Markdown")
+
+def handle_cv_step(uid, chat_id, text):
+    data = get_cv_data(uid) or {"photo_url": None}
+
+    filled = len([k for k in data.keys() if k in CV_FIELDS])
+
+    if filled >= len(CV_FIELDS):
+        clear_cv_data(uid)
+        save_cv_data(uid, {"photo_url": data.get("photo_url")})
+        data = get_cv_data(uid)
+        filled = 0
+
+    field = CV_FIELDS[filled]
+    data[field] = text.strip()
+    save_cv_data(uid, data)
+
+    next_index = filled + 1
+    if next_index < len(CV_FIELDS):
+        next_field = CV_FIELDS[next_index]
+        bot.send_message(chat_id, CV_PROMPTS[next_field], parse_mode="Markdown")
+    else:
+        generate_cv(uid, chat_id, data)
+
+def wrap_text(text, max_chars):
+    words = text.split()
+    lines = []
+    current = ""
+    for w in words:
+        if len(current) + len(w) + 1 <= max_chars:
+            current += (" " if current else "") + w
+        else:
+            if current:
+                lines.append(current)
+            current = w
+    if current:
+        lines.append(current)
+    return lines
+
+def generate_cv(uid, chat_id, data):
+    if not can_use(uid, "cv"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_CV_LIMIT} CV/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        clear_cv_data(uid)
+        set_mode(uid, "voice")
+        return
+
+    bot.send_message(chat_id, "📝 Generating your CV...")
+
+    try:
+        from PIL import ImageDraw, ImageFont
+
+        W, H = 1240, 1754
+        img = Image.new("RGB", (W, H), "white")
+        draw = ImageDraw.Draw(img)
+
+        try:
+            title_font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+            header_font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
+            body_font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        except:
+            title_font = ImageFont.load_default()
+            header_font = ImageFont.load_default()
+            body_font = ImageFont.load_default()
+
+        y = 60
+        margin = 60
+
+        photo_url = data.get("photo_url")
+        if photo_url:
+            try:
+                pr = requests.get(photo_url, timeout=10)
+                photo = Image.open(io.BytesIO(pr.content))
+                photo = photo.resize((200, 200))
+                img.paste(photo, ((W - 200) // 2, y))
+                y += 220
+            except Exception as e:
+                print("Photo insert error:", e, flush=True)
+
+        draw.text((margin, y), data.get("name", ""), fill="black", font=title_font)
+        y += 50
+
+        draw.text((margin, y), data.get("title", ""), fill="gray", font=header_font)
+        y += 40
+
+        contact = f"{data.get('phone','')} | {data.get('email','')} | {data.get('location','')}"
+        draw.text((margin, y), contact, fill="black", font=body_font)
+        y += 40
+
+        draw.line([(margin, y), (W-margin, y)], fill="gray", width=2)
+        y += 25
+
+        sections = [
+            ("PROFESSIONAL SUMMARY", "summary", False),
+            ("WORK EXPERIENCE", "experience", True),
+            ("EDUCATION", "education", True),
+            ("SKILLS", "skills", False),
+            ("CERTIFICATIONS", "certifications", False),
+            ("LANGUAGES", "languages", False),
+            ("REFEREES", "referees", True),
+        ]
+
+        for title, key, multiline in sections:
+            value = data.get(key, "").strip()
+            if not value or value.lower() == "skip":
+                continue
+
+            draw.text((margin, y), title, fill="black", font=header_font)
+            y += 35
+
+            if multiline:
+                for line in value.split("\n"):
+                    if line.strip():
+                        for wl in wrap_text(line.strip(), 70):
+                            draw.text((margin, y), wl, fill="black", font=body_font)
+                            y += 25
+            else:
+                for line in wrap_text(value, 70):
+                    draw.text((margin, y), line, fill="black", font=body_font)
+                    y += 25
+
+            y += 15
+
+            if y > H - 200:
+                break
+
+        pdf_name = data.get("name", "CV").replace(" ", "_") + "_CV.pdf"
+        img.save("cv.pdf", "PDF", resolution=150.0)
+
+        cloud_url = upload_to_cloud("cv.pdf",
+            resource_type="raw", folder="saviour/cv")
+
+        with open("cv.pdf", "rb") as f:
+            bot.send_document(chat_id, f,
+                visible_file_name=pdf_name,
+                caption="📝 Your CV is ready!\n\n"
+                        "Send /start → Tools → CV Builder to make another.")
+
+        if cloud_url:
+            save_file_record(uid, "cv", pdf_name, cloud_url)
+
+        bump(uid, "cv")
+        clear_cv_data(uid)
+        set_mode(uid, "voice")
+
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ CV generation error: {e}")
+        clear_cv_data(uid)
+        set_mode(uid, "voice")
+
+# ---------- VOICE TRANSLATOR ----------
+def handle_voice_translate(uid, chat_id, file_id, target_lang):
+    if not can_use(uid, "voicetrans"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_VOICETRANS_LIMIT} voice translations/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+
+    bot.send_message(chat_id, "🎙 Processing voice...")
+
+    try:
+        info = bot.get_file(file_id)
+        downloaded = bot.download_file(info.file_path)
+        with open("input_voice.ogg", "wb") as f:
+            f.write(downloaded)
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Download failed: {e}")
+        return
+
+    transcript = ""
+    try:
+        import speech_recognition as sr
+        from pydub import AudioSegment
+
+        audio = AudioSegment.from_ogg("input_voice.ogg")
+        audio.export("input_voice.wav", format="wav")
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile("input_voice.wav") as source:
+            audio_data = recognizer.record(source)
+            transcript = recognizer.recognize_google(audio_data)
+    except Exception as e:
+        print("Transcription error:", e, flush=True)
+        bot.send_message(chat_id,
+            "⚠️ Could not transcribe this voice note.\n\n"
+            "Try a clearer recording.",
+            parse_mode="Markdown")
+        return
+
+    if not transcript.strip():
+        bot.send_message(chat_id, "⚠️ No speech detected.")
+        return
+
+    bot.send_message(chat_id, f"📝 Detected: _{transcript[:200]}_", parse_mode="Markdown")
+
+    translated = None
+    for attempt in range(3):
+        try:
+            time.sleep(2)
+            translated = GoogleTranslator(source="auto", target=target_lang).translate(transcript)
+            break
+        except Exception as e:
+            err = str(e)
+            if "Too many requests" in err or "429" in err:
+                if attempt < 2:
+                    time.sleep(10)
+                    continue
+                bot.send_message(chat_id,
+                    "⚠️ *Translation service is busy*\n\n"
+                    "Please try again in a few minutes.",
+                    parse_mode="Markdown")
+                return
+            else:
+                bot.send_message(chat_id, f"⚠️ Translation error: {e}")
+                return
+
+    if not translated:
+        return
+
+    async def _make():
+        voice_key = "ng_male"
+        if target_lang == "fr":
+            voice_key = "fr_denise"
+        elif target_lang == "ar":
+            voice_key = "sa_salma"
+        elif target_lang == "es":
+            voice_key = "es_elvira"
+        elif target_lang == "en":
+            voice_key = "us_aria"
+
+        voice = VOICES.get(voice_key, VOICES["ng_male"])["voice"]
+        communicate = edge_tts.Communicate(translated, voice)
+        await communicate.save("translated_voice.mp3")
+
+    try:
+        asyncio.run(_make())
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Voice generation failed: {e}")
+        return
+
+    result_text = (f"🎙 *Voice Translation*\n"
+                   f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                   f"📝 *Original:*\n{transcript[:300]}\n\n"
+                   f"✅ *{TRANS_LANGS.get(target_lang, target_lang)}:*\n{translated[:300]}")
+
+    bot.send_message(chat_id, result_text, parse_mode="Markdown")
+
+    filename = f"translated_{int(time.time())}.mp3"
+    with open("translated_voice.mp3", "rb") as f:
+        bot.send_document(chat_id, f,
+            visible_file_name=filename,
+            caption="🎧 Translated voice")
+
+    try:
+        cloud_url = upload_to_cloud("translated_voice.mp3",
+            resource_type="video", folder="saviour/voicetrans")
+        if cloud_url:
+            save_file_record(uid, "voicetrans", filename, cloud_url)
+    except:
+        pass
+
+    bump(uid, "voicetrans")
+
+# ---------- QR CODE ----------
+def generate_qr(uid, chat_id, mode, content):
+    if not can_use(uid, "qr"):
+        bot.send_message(chat_id,
+            f"🔒 *Free limit reached*\n\n"
+            f"Free: {FREE_QR_LIMIT} QR codes/day\n\n"
+            f"💎 Upgrade — {PRICE}\nContact @{CREATOR}",
+            parse_mode="Markdown")
+        return
+
+    try:
+        qr_data = content
+
+        if mode == "qr_wifi":
+            parts = content.split("|")
+            if len(parts) < 2:
+                bot.send_message(chat_id, "⚠️ Format: `WiFiName | Password`", parse_mode="Markdown")
+                return
+            ssid = parts[0].strip()
+            pwd = parts[1].strip()
+            qr_data = f"WIFI:T:WPA;S:{ssid};P:{pwd};;"
+
+        elif mode == "qr_vcard":
+            parts = content.split("|")
+            if len(parts) < 2:
+                bot.send_message(chat_id, "⚠️ Format: `Name | Phone | Email`", parse_mode="Markdown")
+                return
+            name = parts[0].strip()
+            phone = parts[1].strip() if len(parts) > 1 else ""
+            email = parts[2].strip() if len(parts) > 2 else ""
+            qr_data = (f"BEGIN:VCARD\nVERSION:3.0\nFN:{name}\n"
+                       f"TEL:{phone}\nEMAIL:{email}\nEND:VCARD")
+
+        img = qrcode.make(qr_data)
+        img.save("qr.png")
+
+        with open("qr.png", "rb") as f:
+            bot.send_photo(chat_id, f, caption="🔲 Your QR code")
+
+        try:
+            cloud_url = upload_to_cloud("qr.png",
+                resource_type="image", folder="saviour/qr")
+            if cloud_url:
+                save_file_record(uid, "qr", f"qr_{int(time.time())}.png", cloud_url)
+        except:
+            pass
+
+        bump(uid, "qr")
+
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ QR error: {e}")
+
+# ---------- PDF/IMAGE PROCESSOR ----------
+def handle_pdf_image(uid, chat_id, mode, file_id, file_name):
+    try:
+        info = bot.get_file(file_id)
+        downloaded = bot.download_file(info.file_path)
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Download failed: {e}")
+        return
+
+    try:
+        if mode == "pdf_pdf2img":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            reader = PdfReader(io.BytesIO(downloaded))
+            pages = len(reader.pages)
+            bot.send_message(chat_id, f"📸 Converting {pages} pages...")
+            for i, page in enumerate(reader.pages):
+                for img in page.images:
+                    bio = io.BytesIO(img.data)
+                    bio.name = f"page_{i+1}.png"
+                    bot.send_document(chat_id, bio, caption=f"Page {i+1}")
+            bump(uid, "pdf")
+            return
+
+        if mode == "pdf_compress":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            reader = PdfReader(io.BytesIO(downloaded))
+            writer = PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+            out = io.BytesIO()
+            writer.write(out)
+            out.seek(0)
+            out.name = f"compressed_{file_name}"
+            bot.send_document(chat_id, out, caption="🗜 Compressed PDF")
+
+            try:
+                out.seek(0)
+                with open("temp.pdf", "wb") as f:
+                    f.write(out.read())
+                cloud_url = upload_to_cloud("temp.pdf",
+                    resource_type="raw", folder="saviour/pdf")
+                if cloud_url:
+                    save_file_record(uid, "pdf", out.name, cloud_url)
+            except:
+                pass
+            bump(uid, "pdf")
+            return
+
+        if mode == "pdf_split":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            reader = PdfReader(io.BytesIO(downloaded))
+            for i, page in enumerate(reader.pages):
+                writer = PdfWriter()
+                writer.add_page(page)
+                out = io.BytesIO()
+                writer.write(out)
+                out.seek(0)
+                out.name = f"page_{i+1}.pdf"
+                bot.send_document(chat_id, out, caption=f"Page {i+1}")
+            bump(uid, "pdf")
+            return
+
+        if mode == "pdf_rotate":
+            if not can_use(uid, "pdf"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            reader = PdfReader(io.BytesIO(downloaded))
+            writer = PdfWriter()
+            for page in reader.pages:
+                page.rotate(90)
+                writer.add_page(page)
+            out = io.BytesIO()
+            writer.write(out)
+            out.seek(0)
+            out.name = f"rotated_{file_name}"
+            bot.send_document(chat_id, out, caption="🔄 Rotated 90°")
+            bump(uid, "pdf")
+            return
+
+        if mode == "img_compress":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded))
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=60, optimize=True)
+            out.seek(0)
+            out.name = f"compressed_{file_name}"
+            bot.send_document(chat_id, out, caption="🗜 Compressed image")
+
+            try:
+                out.seek(0)
+                with open("temp.jpg", "wb") as f:
+                    f.write(out.read())
+                cloud_url = upload_to_cloud("temp.jpg",
+                    resource_type="image", folder="saviour/image")
+                if cloud_url:
+                    save_file_record(uid, "image", out.name, cloud_url)
+            except:
+                pass
+            bump(uid, "image")
+            return
+
+        if mode == "img_resize":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded))
+            w, h = img.size
+            img = img.resize((w // 2, h // 2))
+            out = io.BytesIO()
+            img.save(out, format="JPEG")
+            out.seek(0)
+            out.name = f"resized_{file_name}"
+            bot.send_document(chat_id, out, caption="📐 Resized to 50%")
+            bump(uid, "image")
+            return
+
+        if mode == "img_convert":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded)).convert("RGB")
+            out = io.BytesIO()
+            img.save(out, format="JPEG")
+            out.seek(0)
+            out.name = f"converted_{file_name.rsplit('.', 1)[0]}.jpg"
+            bot.send_document(chat_id, out, caption="🔄 Converted to JPG")
+            bump(uid, "image")
+            return
+
+        if mode == "img_rotate":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded))
+            img = img.rotate(-90, expand=True)
+            out = io.BytesIO()
+            img.save(out, format="JPEG")
+            out.seek(0)
+            out.name = f"rotated_{file_name}"
+            bot.send_document(chat_id, out, caption="↩️ Rotated 90°")
+            bump(uid, "image")
+            return
+
+        if mode == "img_pdf":
+            if not can_use(uid, "image"):
+                bot.send_message(chat_id, "🔒 Free limit reached")
+                return
+            img = Image.open(io.BytesIO(downloaded)).convert("RGB")
+            out = io.BytesIO()
+            img.save(out, format="PDF")
+            out.seek(0)
+            out.name = f"image_{int(time.time())}.pdf"
+            bot.send_document(chat_id, out, caption="📄 Image → PDF")
+            bump(uid, "image")
+            return
+
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Processing error: {e}")
+
+# ---------- BUSINESS CONNECTION (with reconnect) ----------
+@bot.business_connection_handler(func=lambda conn: True)
+def on_business_connection(conn):
+    try:
+        if conn.is_enabled:
+            save_business_connection(conn.id, conn.user.id)
+            bot.send_message(conn.user.id,
+                "✅ SAVIOUR connected to your Telegram Business.\n\n"
+                "Use /setaway keyword | reply to set auto-replies.\n\n"
+                "⚠️ Auto-Reply is Premium only after 48-hour free trial.")
+        else:
+            remove_business_connection(conn.id)
+    except Exception as e:
+        print("Business conn error:", e, flush=True)
+
+@bot.business_message_handler(func=lambda m: True)
+def on_business_message(m):
+    try:
+        connection_id = m.business_connection_id
+        owner_uid = get_business_owner(connection_id)
+
+        if not owner_uid:
+            try:
+                conn_info = bot.get_business_connection(connection_id)
+                owner_uid = conn_info.user.id
+                save_business_connection(connection_id, owner_uid)
+                print(f"Re-fetched connection: {owner_uid}", flush=True)
+            except Exception as e:
+                print(f"Could not re-fetch: {e}", flush=True)
+                return
+
+        # Check Premium gate
+        allowed, status = can_use_auto_reply(owner_uid)
+        if not allowed:
+            return
+
+        # Check toggle
+        if not is_auto_reply_enabled(owner_uid):
+            return
+
+        if m.text:
+            reply = find_away_reply(owner_uid, m.text)
+            if reply:
+                bot.send_message(m.chat.id, reply,
+                    business_connection_id=connection_id)
+                return
+
+        away = get_away_msg(owner_uid)
+        if away:
+            bot.send_message(m.chat.id, away,
+                business_connection_id=connection_id)
+    except Exception as e:
+        print("Business msg error:", e, flush=True)
+
+# ---------- /setaway ----------
+@bot.message_handler(commands=['setaway'])
+def set_away_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = m.text.replace('/setaway', '', 1).strip()
+    if not text:
+        bot.reply_to(m,
+            "💬 *Auto-Reply for Business*\n\n"
+            "*Commands:*\n"
+            "`/setaway keyword | reply` — add keyword\n"
+            "`/setaway default text` — fallback reply\n"
+            "`/editaway keyword | new reply` — edit\n"
+            "`/delaway keyword` — delete one\n"
+            "`/awaylist` — see all\n"
+            "`/clearaway` — remove all",
+            parse_mode="Markdown")
+        return
+
+    if "|" in text:
+        keyword, reply = text.split("|", 1)
+        add_away_keyword(uid, keyword.strip(), reply.strip())
+        bot.reply_to(m, f"✅ Keyword `{keyword.strip()}` added.", parse_mode="Markdown")
+    else:
+        set_away_msg(uid, text)
+        bot.reply_to(m, "✅ Default away message set!")
+
+@bot.message_handler(commands=['editaway'])
+def editaway_cmd(m):
+    uid = m.from_user.id
+    text = m.text.replace('/editaway', '', 1).strip()
+    if "|" not in text:
+        bot.reply_to(m, "Usage: `/editaway keyword | new reply`", parse_mode="Markdown")
+        return
+    keyword, reply = text.split("|", 1)
+    add_away_keyword(uid, keyword.strip(), reply.strip())
+    bot.reply_to(m, f"✅ Keyword `{keyword.strip()}` updated.", parse_mode="Markdown")
+
+@bot.message_handler(commands=['delaway'])
+def delaway_cmd(m):
+    uid = m.from_user.id
+    keyword = m.text.replace('/delaway', '', 1).strip()
+    if not keyword:
+        bot.reply_to(m, "Usage: `/delaway keyword`", parse_mode="Markdown")
+        return
+    if delete_away_keyword(uid, keyword):
+        bot.reply_to(m, f"✅ Keyword `{keyword}` deleted.", parse_mode="Markdown")
+    else:
+        bot.reply_to(m, f"⚠️ Keyword `{keyword}` not found.", parse_mode="Markdown")
+
+@bot.message_handler(commands=['awaylist'])
+def awaylist_cmd(m):
+    uid = m.from_user.id
+    kws = get_away_keywords(uid)
+    default = get_away_msg(uid)
+    out = "📋 *Your Away Replies*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    if default:
+        out += f"*Default:* {default}\n\n"
+    if kws:
+        out += "*Keywords:*\n"
+        for k in kws:
+            out += f"• `{k['keyword']}` → {k['reply'][:50]}\n"
+    else:
+        out += "_No keywords yet._"
+    bot.reply_to(m, out, parse_mode="Markdown")
+
+@bot.message_handler(commands=['clearaway'])
+def clearaway_cmd(m):
+    uid = m.from_user.id
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM away_keywords WHERE user_id=%s", (uid,))
+        cur.execute("UPDATE users SET away_message=NULL WHERE user_id=%s", (uid,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        bot.reply_to(m, "✅ All away replies cleared.")
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+# ---------- /say /lrc ----------
+@bot.message_handler(commands=['say'])
+def say_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    text = m.text.replace('/say', '', 1).strip()
+    if not text:
+        bot.reply_to(m,
+            "🎙 *Voice from Text*\n\n"
+            "Usage: `/say your text here`\n"
+            "Example: `/say Good morning everyone`",
+            parse_mode="Markdown")
+        return
+    make_voice_note(uid, m.chat.id, text)
+
+@bot.message_handler(commands=['lrc'])
+def lrc_cmd(m):
+    uid = m.from_user.id
+    if is_banned(uid):
+        return
+    q = m.text.replace('/lrc', '', 1).strip()
+    if not q:
+        bot.reply_to(m,
+            "📝 *Lyrics Search*\n\n"
+            "Usage: `/lrc song name - artist`\n"
+            "Example: `/lrc Shape of You - Ed Sheeran`",
+            parse_mode="Markdown")
+        return
+    send_lrc(uid, m.chat.id, q)
+
+# ---------- ADMIN ----------
+def admin_only(m):
+    return m.from_user.id == ADMIN_ID
+
+@bot.message_handler(commands=['addpaid'])
+def addpaid_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_paid(uid, 1)
+        bot.reply_to(m, f"✅ {uid} is now Premium")
+        try:
+            bot.send_message(uid, "🎉 You are now Premium!")
+        except:
+            pass
+    except:
+        bot.reply_to(m, "Usage: /addpaid user_id")
+
+@bot.message_handler(commands=['removepaid'])
+def removepaid_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_paid(uid, 0)
+        bot.reply_to(m, f"👤 {uid} removed from Premium")
+    except:
+        bot.reply_to(m, "Usage: /removepaid user_id")
+
+@bot.message_handler(commands=['ban'])
+def ban_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_banned(uid, 1)
+        bot.reply_to(m, f"🚫 {uid} banned")
+    except:
+        bot.reply_to(m, "Usage: /ban user_id")
+
+@bot.message_handler(commands=['unban'])
+def unban_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        uid = int(m.text.split()[1])
+        set_banned(uid, 0)
+        bot.reply_to(m, f"✅ {uid} unbanned")
+    except:
+        bot.reply_to(m, "Usage: /unban user_id")
+
+@bot.message_handler(commands=['users'])
+def users_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT user_id, username, first_name, paid, banned, last_seen
+                       FROM users ORDER BY last_seen DESC LIMIT 20""")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        out = "👥 Recent Users:\n\n"
+        for r in rows:
+            tag = "[PAID]" if r["paid"] else "[FREE]"
+            bn = "[BANNED]" if r["banned"] else ""
+            name = r["first_name"] or "—"
+            uname = f"@{r['username']}" if r["username"] else "—"
+            out += f"{tag}{bn} {r['user_id']}\n   {name} | {uname} | {r['last_seen']}\n\n"
+        bot.reply_to(m, out)
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+@bot.message_handler(commands=['stats'])
+def stats_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) as total FROM users")
+        total = cur.fetchone()["total"]
+        cur.execute("SELECT COUNT(*) as p FROM users WHERE paid=1")
+        paid = cur.fetchone()["p"]
+        cur.execute("SELECT COUNT(*) as b FROM users WHERE banned=1")
+        banned = cur.fetchone()["b"]
+        cur.execute("SELECT COUNT(*) as f FROM files")
+        files = cur.fetchone()["f"]
+        cur.execute("SELECT COUNT(*) as g FROM games WHERE status IN ('playing','waiting')")
+        games = cur.fetchone()["g"]
+        cur.close()
+        conn.close()
+        bot.reply_to(m,
+            f"📊 Stats\n\n"
+            f"Users: {total}\n"
+            f"Paid: {paid}\n"
+            f"Banned: {banned}\n"
+            f"Files: {files}\n"
+            f"Active games: {games}")
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+@bot.message_handler(commands=['admin'])
+def admin_cmd(m):
+    if not admin_only(m):
+        return
+    bot.reply_to(m,
+        "🛡️ ADMIN PANEL\n\n"
+        "Users:\n"
+        "/users — recent users\n"
+        "/stats — overview\n"
+        "/addpaid <id> — unlock\n"
+        "/removepaid <id> — lock\n"
+        "/ban <id> — ban\n"
+        "/unban <id> — unban\n\n"
+        "Away:\n"
+        "/editaway keyword | reply\n"
+        "/delaway keyword\n\n"
+        "Channel:\n"
+        "/setchannel <id> — manual link\n"
+        "/post <message>\n"
+        "/schedule HH:MM | message\n\n"
+        "Scams:\n"
+        "/addscam Title | Description\n\n"
+        "System:\n"
+        "/maintenance on|off\n"
+        "/synccommands")
+
+@bot.message_handler(commands=['maintenance'])
+def maintenance_cmd(m):
+    if not admin_only(m):
+        return
+    arg = m.text.replace('/maintenance', '', 1).strip().lower()
+    if arg == "on":
+        set_maintenance(True)
+        bot.reply_to(m, "🛠 Maintenance mode ON")
+    elif arg == "off":
+        set_maintenance(False)
+        bot.reply_to(m, "✅ Maintenance mode OFF")
+    else:
+        status = "ON" if get_maintenance() else "OFF"
+        bot.reply_to(m, f"🛠 Maintenance: {status}")
+
+@bot.message_handler(commands=['synccommands'])
+def synccommands_cmd(m):
+    if not admin_only(m):
+        return
+    try:
+        register_commands()
+        bot.reply_to(m, "✅ Commands synced for all users")
+    except Exception as e:
+        bot.reply_to(m, f"Error: {e}")
+
+@bot.message_handler(commands=['addscam'])
+def addscam_cmd(m):
+    if not admin_only(m):
+        return
+    text = m.text.replace('/addscam', '', 1).strip()
+    if "|" not in text:
+        bot.reply_to(m, "Usage: /addscam Title | Description")
+        return
+    title, desc = text.split("|", 1)
+    if add_scam_alert(title.strip(), desc.strip()):
+        bot.reply_to(m, "✅ Scam alert added.")
+    else:
+        bot.reply_to(m, "⚠️ Failed to add.")
+
+# ---------- CHANNEL POSTER ----------
+def save_channel_direct(uid, channel_id, channel_name):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""SELECT id FROM channels
+                       WHERE user_id=%s AND channel_id=%s""",
+                    (uid, channel_id))
+        row = cur.fetchone()
+        if not row:
+            cur.execute("""INSERT INTO channels (user_id, channel_id, channel_name)
+                           VALUES (%s, %s, %s)""",
+                        (uid, channel_id, channel_name))
+            conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("save_channel_direct error:", e, flush=True)
+
+@bot.message_handler(commands=['setchannel'])
+def setchannel_cmd(m):
+    uid = m.from_user.id
+    if uid != ADMIN_ID:
+        return
+    parts = m.text.replace('/setchannel', '', 1).strip().split()
+    if not parts:
+        bot.reply_to(m, "Usage: /setchannel <channel_id>\n\n"
+                        "(SAVIOUR usually detects channels automatically when added as admin)")
+        return
+    channel_id = parts[0]
+    add_channel(uid, channel_id, parts[1] if len(parts) > 1 else channel_id)
+    bot.reply_to(m, f"✅ Channel {channel_id} linked.")
+
+@bot.message_handler(commands=['post'])
+def post_cmd(m):
+    if m.from_user.id != ADMIN_ID:
+        return
+    text = m.text.replace('/post', '', 1).strip()
+    if not text:
+        bot.reply_to(m, "Usage: /post your message")
+        return
+    channels = get_channels(ADMIN_ID)
+    if not channels:
+        bot.reply_to(m, "⚠️ No channel linked.\nAdd SAVIOUR as admin to a channel and it will be detected automatically.")
+        return
+    for ch in channels:
+        try:
+            bot.send_message(ch["channel_id"], text)
+            bot.reply_to(m, f"✅ Posted to {ch['channel_name']}")
+        except Exception as e:
+            bot.reply_to(m, f"❌ Failed: {e}")
+
+@bot.message_handler(commands=['schedule'])
+def schedule_cmd(m):
+    if m.from_user.id != ADMIN_ID:
+        return
+    text = m.text.replace('/schedule', '', 1).strip()
+    if "|" not in text:
+        bot.reply_to(m, "Usage: /schedule HH:MM | message")
+        return
+    time_part, msg = text.split("|", 1)
+    channels = get_channels(ADMIN_ID)
+    if not channels:
+        bot.reply_to(m, "⚠️ No channel linked.")
+        return
+    for ch in channels:
+        add_scheduled(ch["channel_id"], time_part.strip(), msg.strip())
+    bot.reply_to(m, f"✅ Scheduled for {time_part.strip()} daily.")
