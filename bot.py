@@ -1629,3 +1629,776 @@ def security_page(chat_id, message_id=None):
             reply_markup=markup, parse_mode="Markdown")
     else:
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- VOICE PAGES ----------
+def voice_countries_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    btns = []
+    for ckey, cinfo in COUNTRIES.items():
+        count = sum(1 for v in VOICES.values() if v["country"] == ckey)
+        if count > 0:
+            btns.append(types.InlineKeyboardButton(
+                f"{cinfo['flag']} {cinfo['name']}",
+                callback_data=f"vc_{ckey}"))
+    for i in range(0, len(btns), 3):
+        markup.row(*btns[i:i+3])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="menu"))
+
+    current = get_voice_key(uid)
+    if current not in VOICES:
+        current = "ng_male"
+    cur_name = VOICES[current]["label"]
+    cur_country = COUNTRIES[VOICES[current]["country"]]
+
+    text = ("🎙 *Voice Generator*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Turn any text into natural speech.\n\n"
+            "*How to use:*\n"
+            "1. Pick a country below\n"
+            "2. Choose a voice\n"
+            "3. Type your message\n"
+            "4. Get a downloadable MP3\n\n"
+            f"*Current voice:* {cur_country['flag']} *{cur_name}*")
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+def voice_list_page(chat_id, uid, country_key, message_id=None):
+    current = get_voice_key(uid)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btns = []
+    for key, info in VOICES.items():
+        if info["country"] == country_key:
+            label = f"✅ {info['label']}" if key == current else info['label']
+            btns.append(types.InlineKeyboardButton(label, callback_data=f"setvoice_{key}"))
+    for i in range(0, len(btns), 2):
+        markup.row(*btns[i:i+2])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="voice"))
+
+    c = COUNTRIES[country_key]
+    text = (f"🎙 *{c['flag']} {c['name']} Voices*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Tap one to select it.\n"
+            "The ✅ shows your current voice.")
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- TRANSLATOR PAGE ----------
+def translate_lang_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btns = []
+    for code, name in TRANS_LANGS.items():
+        btns.append(types.InlineKeyboardButton(name, callback_data=f"tr_{code}"))
+    for i in range(0, len(btns), 2):
+        markup.row(*btns[i:i+2])
+    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+
+    text = ("🌍 *Translator*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Translate text between 24 languages.\n\n"
+            "*How to use:*\n"
+            "1. Pick target language below\n"
+            "2. Type your text\n"
+            "3. Get instant translation\n\n"
+            "*Examples:*\n"
+            "→ \"Good morning\" → French = \"Bonjour\"\n"
+            "→ \"How are you?\" → Yoruba = \"Báwo ni?\"\n"
+            "→ \"Thank you\" → Hausa = \"Na gode\"")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- PDF PAGE ----------
+def pdf_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✂️ Split PDF", callback_data="pdf_split"),
+        types.InlineKeyboardButton("🗜 Compress PDF", callback_data="pdf_compress"),
+        types.InlineKeyboardButton("🔄 Rotate PDF", callback_data="pdf_rotate"),
+        types.InlineKeyboardButton("📸 PDF → Images", callback_data="pdf_pdf2img"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("📄 *PDF Suite*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Work with PDF files quickly.\n\n"
+            "*Available actions:*\n"
+            "✂️ Split — break into pages\n"
+            "🗜 Compress — reduce file size\n"
+            "🔄 Rotate — turn 90°\n"
+            "📸 Convert — extract images\n\n"
+            "⚠️ Max file size: 20 MB\n\n"
+            "Tap an action, then send your PDF.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- IMAGE PAGE ----------
+def image_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🗜 Compress", callback_data="img_compress"),
+        types.InlineKeyboardButton("📐 Resize", callback_data="img_resize"),
+        types.InlineKeyboardButton("🔄 Convert", callback_data="img_convert"),
+        types.InlineKeyboardButton("↩️ Rotate/Flip", callback_data="img_rotate"),
+        types.InlineKeyboardButton("📄 Image → PDF", callback_data="img_pdf"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("🖼 *Image Tools*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Edit images quickly on Telegram.\n\n"
+            "🗜 Compress — smaller file\n"
+            "📐 Resize — 50% smaller\n"
+            "🔄 Convert — to JPG\n"
+            "↩️ Rotate — turn 90°\n"
+            "📄 Convert — Image to PDF\n\n"
+            "⚠️ Max file size: 20 MB\n\n"
+            "Tap an action, then send your image.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- SECURITY PAGE ----------
+def security_page(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔗 Check Link", callback_data="sec_link"),
+        types.InlineKeyboardButton("📸 Check Screenshot", callback_data="sec_screenshot"),
+        types.InlineKeyboardButton("📚 Scam Alerts", callback_data="sec_scams"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("🛡️ *SAVIOUR Security Center*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Protect yourself from scams and fraud.\n\n"
+            "🔗 *Check Link*\n"
+            "Test any suspicious link before you click.\n\n"
+            "📸 *Check Screenshot*\n"
+            "Analyze payment screenshots for red flags.\n\n"
+            "📚 *Scam Alerts*\n"
+            "See the latest Nigerian scams.\n\n"
+            "⚠️ *Important:*\n"
+            "No tool catches every scam. Always verify "
+            "in your bank app before releasing goods.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- MY FILES PAGE ----------
+def my_files_page(chat_id, uid, message_id=None):
+    counts = get_file_counts(uid)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(f"🎙 Voice ({counts.get('voice', 0)})",
+            callback_data="mf_voice"),
+        types.InlineKeyboardButton(f"📝 Lyrics ({counts.get('lyrics', 0)})",
+            callback_data="mf_lyrics"),
+        types.InlineKeyboardButton(f"📄 PDF ({counts.get('pdf', 0)})",
+            callback_data="mf_pdf"),
+        types.InlineKeyboardButton(f"🖼 Image ({counts.get('image', 0)})",
+            callback_data="mf_image"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="menu"),
+    )
+    text = ("📚 *My Files*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "All files you've generated.\n\n"
+            "✅ Stay here even if you change phones\n"
+            "✅ Re-download anytime\n"
+            "✅ Sorted by type")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+def my_files_list(chat_id, uid, file_type, message_id=None):
+    files = get_user_files(uid, file_type)
+    if not files:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="myfiles"))
+        text = (f"📁 *No {file_type} files yet*\n\n"
+                "Generate some and they'll show up here.")
+        if message_id:
+            bot.edit_message_text(text, chat_id, message_id,
+                reply_markup=markup, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for i, f in enumerate(files):
+        label = f"{f['file_name'][:40]} ({f['created']})"
+        markup.add(types.InlineKeyboardButton(label, url=f["cloud_url"]))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="myfiles"))
+
+    text = (f"📁 *Your {file_type} files*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Tap any file to open or download it.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- CV PAGE ----------
+def cv_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("📝 Create New CV", callback_data="cv_new"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("📝 *CV Builder*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Create a professional CV in minutes.\n\n"
+            "*What you'll need:*\n"
+            "• Your photo (optional)\n"
+            "• Full name, phone, email\n"
+            "• Location, experience, education\n"
+            "• Skills, certifications\n\n"
+            "*Features:*\n"
+            "✅ ATS-friendly format\n"
+            "✅ Add your photo\n"
+            "✅ Download as PDF\n\n"
+            "Tap below to start 👇")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- VOICE TRANSLATOR PAGE ----------
+def voicetrans_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    langs = ["en", "fr", "es", "yo", "ig", "ha", "ar"]
+    for code in langs:
+        if code in TRANS_LANGS:
+            markup.add(types.InlineKeyboardButton(
+                TRANS_LANGS[code], callback_data=f"vt_{code}"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="tools"))
+
+    text = ("🎙 *Voice Translator*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Translate voice messages between languages.\n\n"
+            "*How it works:*\n"
+            "1. Pick target language\n"
+            "2. Send a voice note\n"
+            "3. Get translated voice back\n\n"
+            "*Examples:*\n"
+            "→ Yoruba voice → English voice\n"
+            "→ English voice → French voice\n\n"
+            "Tap a target language 👇")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- QR CODE PAGE ----------
+def qr_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔗 Link QR", callback_data="qr_link"),
+        types.InlineKeyboardButton("📶 WiFi QR", callback_data="qr_wifi"),
+        types.InlineKeyboardButton("👤 Contact QR", callback_data="qr_vcard"),
+        types.InlineKeyboardButton("📝 Text QR", callback_data="qr_text"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="tools"),
+    )
+    text = ("🔲 *QR Code Studio*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Generate QR codes for anything.\n\n"
+            "🔗 Link — website, YouTube, etc.\n"
+            "📶 WiFi — auto-connect to your WiFi\n"
+            "👤 Contact — save your details\n"
+            "📝 Text — any text\n\n"
+            "Tap a type to start 👇")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- TIC TAC TOE PAGE ----------
+def ttt_page(chat_id, uid, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🤖 Play vs SAVIOUR", callback_data="ttt_bot_menu"),
+        types.InlineKeyboardButton("📊 My Stats", callback_data="ttt_stats"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="games"),
+    )
+    stats = get_game_stats(uid)
+    sp = stats["sp"] if stats else 0
+    wins = stats["wins"] if stats else 0
+    losses = stats["losses"] if stats else 0
+
+    text = ("❌ *Tic Tac Toe* ⭕\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Play against SAVIOUR.\n\n"
+            f"*Your Stats:*\n"
+            f"🏅 SP: {sp}\n"
+            f"✅ Wins: {wins}\n"
+            f"❌ Losses: {losses}\n\n"
+            "*SP Rewards:*\n"
+            "Easy win: +1 SP\n"
+            "Medium win: +3 SP\n"
+            "Hard win: +5 SP\n"
+            "Draw: +1 SP")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+def ttt_bot_menu(chat_id, message_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🟢 Easy (+1 SP)", callback_data="ttt_new_bot_easy"),
+        types.InlineKeyboardButton("🟡 Medium (+3 SP)", callback_data="ttt_new_bot_medium"),
+        types.InlineKeyboardButton("🔴 Hard (+5 SP)", callback_data="ttt_new_bot_hard"),
+        types.InlineKeyboardButton("⬅️ Back", callback_data="game_ttt"),
+    )
+    text = ("🤖 *Play vs SAVIOUR*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Choose difficulty:\n\n"
+            "🟢 *Easy* — Random moves, easy to win\n"
+            "🟡 *Medium* — Blocks your wins sometimes\n"
+            "🔴 *Hard* — Nearly unbeatable\n\n"
+            "More SP for harder difficulty!")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- TRIVIA PAGE ----------
+def trivia_page(chat_id, uid, message_id=None):
+    used = get_trivia_sessions_today(uid)
+    remaining = max(0, 3 - used)
+
+    # Check if there's an active session
+    active = get_active_trivia(uid)
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    if active:
+        markup.add(types.InlineKeyboardButton("▶️ Continue Trivia",
+            callback_data="trivia_continue"))
+    elif remaining > 0:
+        markup.add(types.InlineKeyboardButton("▶️ Start Trivia",
+            callback_data="trivia_start"))
+    else:
+        markup.add(types.InlineKeyboardButton("❌ No sessions left today",
+            callback_data="games"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="games"))
+
+    text = ("🎯 *Daily Trivia*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Answer 5 questions per session.\n\n"
+            "*Rewards:*\n"
+            "✅ Correct answer: +2 SP\n"
+            "🎉 Perfect 5/5: +5 SP bonus\n\n"
+            f"*Sessions left today:* {remaining}/3\n\n"
+            "New sessions reset at midnight.")
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- LEADERBOARD ----------
+def leaderboard_page(chat_id, uid, message_id=None):
+    rows = get_leaderboard(10)
+    if not rows:
+        text = ("🏆 *Leaderboard*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "No players yet.\n"
+                "Play a game to appear here!")
+    else:
+        text = ("🏆 *Leaderboard — All Time*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n")
+        medals = ["🥇", "🥈", "🥉"]
+        for i, r in enumerate(rows):
+            pos = medals[i] if i < 3 else f"{i+1}."
+            name = r["first_name"] or r["username"] or f"User{r['user_id']}"
+            sp = r["sp"]
+            you = " ← you" if r["user_id"] == uid else ""
+            text += f"{pos} {name} — {sp} SP{you}\n"
+
+        text += "\n*Daily rewards:*\n"
+        text += "🥇 3 free Premium days\n"
+        text += "🥈 2 free Premium days\n"
+        text += "🥉 1 free Premium day"
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="game_lb"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="games"))
+
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id,
+            reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+# ---------- TIC TAC TOE LOGIC ----------
+def ttt_board_keyboard(board, game_id):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    row = []
+    for i, cell in enumerate(board):
+        if cell == "X":
+            label = "❌"
+        elif cell == "O":
+            label = "⭕"
+        else:
+            label = "⬜"
+        row.append(types.InlineKeyboardButton(label, callback_data=f"ttt_move_{game_id}_{i}"))
+        if len(row) == 3:
+            markup.row(*row)
+            row = []
+    markup.row(types.InlineKeyboardButton("🏳️ Forfeit", callback_data=f"ttt_forfeit_{game_id}"))
+    return markup
+
+def ttt_check_winner(board):
+    lines = [
+        [0,1,2],[3,4,5],[6,7,8],
+        [0,3,6],[1,4,7],[2,5,8],
+        [0,4,8],[2,4,6]
+    ]
+    for a,b,c in lines:
+        if board[a] != "-" and board[a] == board[b] == board[c]:
+            return board[a]
+    if "-" not in board:
+        return "draw"
+    return None
+
+def ttt_bot_move(board, difficulty):
+    empty = [i for i, c in enumerate(board) if c == "-"]
+    if not empty:
+        return None
+
+    if difficulty == "easy":
+        return random.choice(empty)
+
+    # Medium/Hard: check if bot can win
+    def find_winning_move(symbol):
+        for i in empty:
+            test = list(board)
+            test[i] = symbol
+            if ttt_check_winner(test) == symbol:
+                return i
+        return None
+
+    # Win move
+    win = find_winning_move("O")
+    if win is not None:
+        return win
+
+    # Block player win
+    block = find_winning_move("X")
+    if block is not None:
+        return block
+
+    if difficulty == "medium":
+        if random.random() < 0.5:
+            return random.choice(empty)
+
+    # Hard: take center or corner
+    if 4 in empty:
+        return 4
+    corners = [i for i in [0,2,6,8] if i in empty]
+    if corners:
+        return random.choice(corners)
+    return random.choice(empty)
+
+def create_ttt_game(uid, vs_bot, difficulty):
+    game_id = f"{uid}_{int(time.time())}"
+    board = "---------"
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO games (game_id, player1_id, board, turn,
+                       status, vs_bot, difficulty)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (game_id, uid, board, uid, "playing" if vs_bot else "waiting",
+                     1 if vs_bot else 0, difficulty))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return game_id
+    except Exception as e:
+        print("create_ttt_game error:", e, flush=True)
+        return None
+
+def get_ttt_game(game_id):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM games WHERE game_id=%s", (game_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row
+    except:
+        return None
+
+def update_ttt_game(game_id, board, turn, status, winner=None):
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""UPDATE games SET board=%s, turn=%s, status=%s,
+                       winner=%s, last_move=NOW() WHERE game_id=%s""",
+                    (board, turn, status, winner, game_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("update_ttt_game error:", e, flush=True)
+
+def render_ttt(chat_id, game, message_id=None):
+    board = game["board"]
+    winner = ttt_check_winner(board)
+
+    if winner == "X":
+        text = "🎉 *You win!* 🎉"
+        status = "won"
+    elif winner == "O":
+        text = "😢 *SAVIOUR wins!*"
+        status = "lost"
+    elif winner == "draw":
+        text = "🤝 *It's a draw!*"
+        status = "draw"
+    else:
+        turn = "Your turn" if game["turn"] == game["player1_id"] else "Opponent's turn"
+        text = f"❌ *Tic Tac Toe* ⭕\n\n{turn}"
+
+    markup = ttt_board_keyboard(board, game["game_id"])
+    if winner:
+        markup.add(types.InlineKeyboardButton("🔄 Play again",
+            callback_data=f"ttt_again_{game['difficulty']}"))
+        markup.add(types.InlineKeyboardButton("⬅️ Games menu", callback_data="games"))
+
+    if message_id:
+        try:
+            bot.edit_message_text(text, chat_id, message_id,
+                reply_markup=markup, parse_mode="Markdown")
+        except:
+            pass
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+    return winner
+
+def process_ttt_move(uid, chat_id, game_id, position, message_id):
+    game = get_ttt_game(game_id)
+    if not game:
+        bot.send_message(chat_id, "⚠️ Game not found.")
+        return
+
+    if game["status"] not in ["playing", "waiting"]:
+        return
+
+    board = list(game["board"])
+    if board[position] != "-":
+        return
+
+    # Player move (X)
+    board[position] = "X"
+    winner = ttt_check_winner(board)
+
+    if winner == "X":
+        update_ttt_game(game_id, "".join(board), game["turn"], "won", uid)
+        record_game_result(uid, "win", game["difficulty"])
+        game = get_ttt_game(game_id)
+        render_ttt(chat_id, game, message_id)
+        return
+    elif winner == "draw":
+        update_ttt_game(game_id, "".join(board), game["turn"], "draw")
+        record_game_result(uid, "draw", game["difficulty"])
+        game = get_ttt_game(game_id)
+        render_ttt(chat_id, game, message_id)
+        return
+
+    # Bot move if vs_bot
+    if game["vs_bot"]:
+        bot_pos = ttt_bot_move(board, game["difficulty"])
+        if bot_pos is not None:
+            board[bot_pos] = "O"
+
+        winner = ttt_check_winner(board)
+        if winner == "O":
+            update_ttt_game(game_id, "".join(board), game["turn"], "lost")
+            record_game_result(uid, "loss", game["difficulty"])
+        elif winner == "draw":
+            update_ttt_game(game_id, "".join(board), game["turn"], "draw")
+            record_game_result(uid, "draw", game["difficulty"])
+        else:
+            update_ttt_game(game_id, "".join(board), game["turn"], "playing")
+
+        game = get_ttt_game(game_id)
+        render_ttt(chat_id, game, message_id)
+
+# ---------- TRIVIA LOGIC (database-based) ----------
+def start_trivia(uid, chat_id, message_id=None):
+    used = get_trivia_sessions_today(uid)
+    if used >= 3:
+        bot.send_message(chat_id, "❌ No trivia sessions left today. Come back tomorrow!")
+        return
+
+    questions = fetch_trivia_questions()
+    if not questions:
+        bot.send_message(chat_id, "⚠️ Could not load questions. Try again later.")
+        return
+
+    # Save session to database
+    today = datetime.date.today()
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO daily_trivia
+                       (user_id, play_date, sessions_used, questions, current_q, score, total, in_progress)
+                       VALUES (%s, %s, 1, %s, 0, 0, %s, 1)
+                       ON CONFLICT DO NOTHING""",
+                    (uid, today, json.dumps(questions), len(questions)))
+        cur.execute("""UPDATE daily_trivia SET
+                       questions = %s,
+                       current_q = 0,
+                       score = 0,
+                       total = %s,
+                       in_progress = 1
+                       WHERE user_id=%s AND play_date=%s""",
+                    (json.dumps(questions), len(questions), uid, today))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("start_trivia save error:", e, flush=True)
+
+    send_trivia_question(uid, chat_id)
+
+def send_trivia_question(uid, chat_id):
+    active = get_active_trivia(uid)
+    if not active:
+        return
+
+    questions = active["questions"]
+    idx = active["current"]
+    score = active["score"]
+
+    if idx >= len(questions):
+        finish_trivia(uid, chat_id)
+        return
+
+    q = questions[idx]
+    options = q["options"][:4]
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for i, opt in enumerate(options):
+        markup.add(types.InlineKeyboardButton(
+            opt[:60], callback_data=f"triv_ans_{i}"))
+
+    text = (f"🎯 *Question {idx+1}/5*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{q['q'][:300]}\n\n"
+            f"Score: {score}/{idx}")
+
+    try:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+    except:
+        bot.send_message(chat_id, text, reply_markup=markup)
+
+def answer_trivia(uid, chat_id, answer_index, message_id):
+    active = get_active_trivia(uid)
+    if not active:
+        bot.edit_message_text("⚠️ Session expired.", chat_id, message_id)
+        return
+
+    questions = active["questions"]
+    idx = active["current"]
+    score = active["score"]
+
+    if idx >= len(questions):
+        return
+
+    q = questions[idx]
+    correct_answer = q["a"]
+    given = q["options"][answer_index] if answer_index < len(q["options"]) else ""
+
+    if given == correct_answer:
+        score += 1
+        add_sp(uid, 2, "trivia_correct")
+        result = f"✅ *Correct!*\n\nThe answer is: {correct_answer}"
+    else:
+        result = f"❌ *Wrong!*\n\nCorrect answer: {correct_answer}"
+
+    try:
+        bot.edit_message_text(result, chat_id, message_id, parse_mode="Markdown")
+    except:
+        try:
+            bot.edit_message_text(result, chat_id, message_id)
+        except:
+            pass
+
+    # Update database with new progress
+    idx += 1
+    today = datetime.date.today()
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("""UPDATE daily_trivia SET current_q=%s, score=%s
+                       WHERE user_id=%s AND play_date=%s""",
+                    (idx, score, uid, today))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("answer_trivia update error:", e, flush=True)
+
+    time.sleep(1)
+    send_trivia_question(uid, chat_id)
+
+def finish_trivia(uid, chat_id):
+    active = get_active_trivia(uid)
+    if not active:
+        return
+
+    questions = active["questions"]
+    score = active["score"]
+    total = len(questions)
+
+    if score == total:
+        add_sp(uid, 5, "trivia_perfect")
+
+    increment_trivia_session(uid)
+    clear_active_trivia(uid)
+
+    text = (f"🎉 *Trivia Complete!*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Score: {score}/{total}\n"
+            f"SP earned: {score * 2}")
+
+    if score == total:
+        text += " + 5 bonus"
+
+    text += "\n\n"
+
+    if score == total:
+        text += "🏆 *PERFECT SCORE!* +5 bonus SP\n\n"
+    text += "Come back tomorrow for more!"
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🏆 Leaderboard", callback_data="game_lb"))
+    markup.add(types.InlineKeyboardButton("⬅️ Games", callback_data="games"))
+
+    try:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+    except:
+        bot.send_message(chat_id, text, reply_markup=markup)
