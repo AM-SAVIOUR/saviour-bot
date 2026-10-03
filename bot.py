@@ -3925,24 +3925,17 @@ def handle_pdf_image(uid, chat_id, mode, file_id, file_name):
         bot.send_message(chat_id, f"⚠️ Processing error: {e}")
 
 # ---------- BUSINESS CONNECTION (with reconnect) ----------
-@bot.business_connection_handler(func=lambda conn: True)
-def on_business_connection(conn):
-    try:
-        if conn.is_enabled:
-            save_business_connection(conn.id, conn.user.id)
-            bot.send_message(conn.user.id,
-                "✅ SAVIOUR connected to your Telegram Business.\n\n"
-                "Use /setaway keyword | reply to set auto-replies.\n\n"
-                "⚠️ Auto-Reply is Premium only after 48-hour free trial.")
-        else:
-            remove_business_connection(conn.id)
-    except Exception as e:
-        print("Business conn error:", e, flush=True)
-
 @bot.business_message_handler(func=lambda m: True)
 def on_business_message(m):
     try:
         connection_id = m.business_connection_id
+        if not connection_id:
+            return
+
+        # Stop bot from replying to itself
+        if m.from_user and m.from_user.is_bot:
+            return
+
         owner_uid = get_business_owner(connection_id)
 
         if not owner_uid:
@@ -3955,12 +3948,14 @@ def on_business_message(m):
                 print(f"Could not re-fetch: {e}", flush=True)
                 return
 
-        # Check Premium gate
+        # Stop bot from replying to the owner's own messages
+        if m.from_user and m.from_user.id == owner_uid:
+            return
+
         allowed, status = can_use_auto_reply(owner_uid)
         if not allowed:
             return
 
-        # Check toggle
         if not is_auto_reply_enabled(owner_uid):
             return
 
@@ -4557,7 +4552,7 @@ def handle_message(m):
 
     if mode == "lyrics":
         send_lrc(uid, m.chat.id, text)
-    elif mode.startswith("tr_"):
+    elif mode and mode.startswith("tr_"):
         target = mode.replace("tr_", "")
         do_translate(uid, m.chat.id, text, target)
     elif mode == "translate":
@@ -4568,12 +4563,15 @@ def handle_message(m):
         handle_cv_step(uid, m.chat.id, text)
     elif mode == "sec_link":
         check_link(uid, m.chat.id, text)
-    elif mode.startswith("qr_"):
+    elif mode and mode.startswith("qr_"):
         generate_qr(uid, m.chat.id, mode, text)
     elif mode == "voice":
         make_voice_note(uid, m.chat.id, text)
     else:
-        make_voice_note(uid, m.chat.id, text)
+        bot.reply_to(m,
+            "👋 *Tap /start to choose a tool first.*\n\n"
+            "Then type your message.",
+            parse_mode="Markdown")
 
 # ---------- WEBHOOK ----------
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
