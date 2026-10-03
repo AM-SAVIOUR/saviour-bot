@@ -160,7 +160,7 @@ def init_db():
                 cv_count INTEGER DEFAULT 0,
                 voicetrans_count INTEGER DEFAULT 0,
                 qr_count INTEGER DEFAULT 0,
-                mode TEXT DEFAULT 'voice',
+                mode TEXT DEFAULT NULL,
                 cv_data TEXT,
                 last_reset DATE,
                 joined DATE DEFAULT CURRENT_DATE,
