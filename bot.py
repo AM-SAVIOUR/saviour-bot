@@ -485,7 +485,7 @@ def set_mode(uid, mode):
 
 def get_mode(uid):
     u = get_user(uid)
-    return u["mode"] if u and u["mode"] else "voice"
+    return u["mode"] if u and u["mode"] else None
 
 def set_away_msg(uid, text):
     try:
