@@ -4132,16 +4132,29 @@ def addpaid_cmd(m):
     if not admin_only(m):
         return
     try:
-        uid = int(m.text.split()[1])
-        set_paid(uid, 1)
-        bot.reply_to(m, f"✅ {uid} is now Premium")
+        parts = m.text.split()
+        uid = int(parts[1])
+        days = int(parts[2]) if len(parts) > 2 else 30  # default 30 days
+        
+        today = datetime.date.today()
+        expiry = today + datetime.timedelta(days=days)
+        
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET paid=1, premium_until=%s WHERE user_id=%s", 
+                    (expiry, uid))
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        bot.reply_to(m, f"✅ {uid} is now Premium for {days} days (until {expiry}).")
         try:
-            bot.send_message(uid, "🎉 You are now Premium!")
+            bot.send_message(uid, f"🎉 You are now Premium for {days} days!\n\n"
+                                  f"⏳ Expires: {expiry}")
         except:
             pass
-    except:
-        bot.reply_to(m, "Usage: /addpaid user_id")
-
+    except Exception as e:
+        bot.reply_to(m, "Usage: `/addpaid user_id [days]`\n\nExample: `/addpaid 123456789 30`", parse_mode="Markdown")
 @bot.message_handler(commands=['removepaid'])
 def removepaid_cmd(m):
     if not admin_only(m):
