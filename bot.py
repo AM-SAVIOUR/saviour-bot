@@ -1276,7 +1276,7 @@ def clear_active_trivia(uid):
         print("clear_active_trivia error:", e, flush=True)
 
 # ---------- PREMIUM TEXT ----------
-def premium_text(uid):
+
 def premium_text(uid):
     if uid == ADMIN_ID:
         return ("👑 *ADMIN ACCOUNT*\n"
