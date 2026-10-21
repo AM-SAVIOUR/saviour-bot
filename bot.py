@@ -386,7 +386,37 @@ def save_user_meta(uid, username, first_name):
 
 def is_paid(uid):
     u = get_user(uid)
-    return bool(u and u["paid"] == 1)
+    if not u or u["paid"] != 1:
+        return False
+        
+    # Check if it has an expiry date
+    expiry = u.get("premium_until")
+    if expiry:
+        today = datetime.date.today()
+        # If today is past the expiry date, automatically turn it off
+        if today > expiry:
+            set_paid(uid, 0)
+            try:
+                # Optional: notify them when they try to use a paid feature
+                # bot.send_message(uid, "⚠️ Your Premium subscription has expired. Upgrade to continue.")
+                pass
+            except:
+                pass
+            return False
+            
+    return True
+
+def get_premium_days_left(uid):
+    u = get_user(uid)
+    if not u or u["paid"] != 1:
+        return 0
+    expiry = u.get("premium_until")
+    if not expiry:
+        return 999 # unlimited
+    today = datetime.date.today()
+    if today > expiry:
+        return 0
+    return (expiry - today).days
 
 def is_banned(uid):
     u = get_user(uid)
