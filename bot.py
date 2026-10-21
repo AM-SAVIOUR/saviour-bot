@@ -1277,6 +1277,7 @@ def clear_active_trivia(uid):
 
 # ---------- PREMIUM TEXT ----------
 def premium_text(uid):
+def premium_text(uid):
     if uid == ADMIN_ID:
         return ("👑 *ADMIN ACCOUNT*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1284,9 +1285,14 @@ def premium_text(uid):
                 "✅ Unlimited access to everything\n"
                 "✅ Full admin panel\n\n"
                 "Thank you for building SAVIOUR! 🚀")
+                
     if is_paid(uid):
-        return ("💎 *PREMIUM ACTIVE*\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
+        days = get_premium_days_left(uid)
+        countdown = f"⏳ *{days} days remaining*" if days < 999 else "♾️ *Unlimited*"
+        
+        return (f"💎 *PREMIUM ACTIVE*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"{countdown}\n\n"
                 "✅ Unlimited voice notes\n"
                 "✅ Unlimited lyrics\n"
                 "✅ Unlimited translation\n"
@@ -1298,6 +1304,7 @@ def premium_text(uid):
                 "✅ Unlimited QR codes\n"
                 "✅ Unlimited Auto-Reply\n\n"
                 "Thank you for supporting SAVIOUR!")
+                
     return (f"💎 *UPGRADE TO PREMIUM*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             f"💰 Price: *{PRICE}*\n\n"
