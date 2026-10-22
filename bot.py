@@ -3510,7 +3510,7 @@ def wrap_text(text, max_chars):
         lines.append(current)
     return lines
 
-def generate_cv(uid, chat_id, data):
+   def generate_cv(uid, chat_id, data):
     if not can_use(uid, "cv"):
         bot.send_message(chat_id,
             f"🔒 *Free limit reached*\n\n"
@@ -3526,93 +3526,111 @@ def generate_cv(uid, chat_id, data):
     try:
         from PIL import ImageDraw, ImageFont
 
+        # A4 size at 150 DPI
         W, H = 1240, 1754
         img = Image.new("RGB", (W, H), "white")
         draw = ImageDraw.Draw(img)
 
+        # Colors
+        SIDEBAR_COLOR = (40, 44, 52)  # Dark modern grey/blue
+        TEXT_COLOR = (33, 33, 33)
+        GRAY_TEXT = (100, 100, 100)
+        WHITE_TEXT = (255, 255, 255)
+
+        # Fonts
         try:
-            title_font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
-            header_font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
-            body_font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42)
+            header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+            body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+            small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
         except:
-            title_font = ImageFont.load_default()
-            header_font = ImageFont.load_default()
-            body_font = ImageFont.load_default()
+            title_font = header_font = body_font = small_font = ImageFont.load_default()
 
-        y = 60
-        margin = 60
+        # --- DRAW SIDEBAR ---
+        SIDEBAR_W = 400
+        draw.rectangle([(0, 0), (SIDEBAR_W, H)], fill=SIDEBAR_COLOR)
 
+        # Photo
+        y_side = 60
         photo_url = data.get("photo_url")
         if photo_url:
             try:
                 pr = requests.get(photo_url, timeout=10)
                 photo = Image.open(io.BytesIO(pr.content))
                 photo = photo.resize((200, 200))
-                img.paste(photo, ((W - 200) // 2, y))
-                y += 220
+                # Make it circular
+                mask = Image.new("L", (200, 200), 0)
+                draw_mask = ImageDraw.Draw(mask)
+                draw_mask.ellipse((0, 0, 200, 200), fill=255)
+                img.paste(photo, ((SIDEBAR_W - 200) // 2, y_side), mask)
+                y_side += 240
             except Exception as e:
                 print("Photo insert error:", e, flush=True)
 
-        draw.text((margin, y), data.get("name", ""), fill="black", font=title_font)
-        y += 50
+        # Contact Info
+        def draw_sidebar_section(title, text, y_pos):
+            draw.text((40, y_pos), title, fill=WHITE_TEXT, font=header_font)
+            y_pos += 35
+            for line in wrap_text(text, 35):
+                draw.text((40, y_pos), line, fill=(200, 200, 200), font=small_font)
+                y_pos += 25
+            return y_pos + 20
 
-        draw.text((margin, y), data.get("title", ""), fill="gray", font=header_font)
-        y += 40
+        y_side = draw_sidebar_section("CONTACT", f"{data.get('phone','')}\n{data.get('email','')}\n{data.get('location','')}", y_side)
+        if data.get("skills"):
+            y_side = draw_sidebar_section("SKILLS", data.get("skills"), y_side)
+        if data.get("languages"):
+            y_side = draw_sidebar_section("LANGUAGES", data.get("languages"), y_side)
+        if data.get("certifications") and data.get("certifications").lower() != "skip":
+            y_side = draw_sidebar_section("CERTIFICATIONS", data.get("certifications"), y_side)
 
-        contact = f"{data.get('phone','')} | {data.get('email','')} | {data.get('location','')}"
-        draw.text((margin, y), contact, fill="black", font=body_font)
-        y += 40
+        # --- DRAW MAIN CONTENT ---
+        MAIN_X = SIDEBAR_W + 50
+        y_main = 60
 
-        draw.line([(margin, y), (W-margin, y)], fill="gray", width=2)
-        y += 25
+        # Name & Title
+        draw.text((MAIN_X, y_main), data.get("name", "").upper(), fill=TEXT_COLOR, font=title_font)
+        y_main += 55
+        draw.text((MAIN_X, y_main), data.get("title", ""), fill=GRAY_TEXT, font=header_font)
+        y_main += 50
 
-        sections = [
-            ("PROFESSIONAL SUMMARY", "summary", False),
-            ("WORK EXPERIENCE", "experience", True),
-            ("EDUCATION", "education", True),
-            ("SKILLS", "skills", False),
-            ("CERTIFICATIONS", "certifications", False),
-            ("LANGUAGES", "languages", False),
-            ("REFEREES", "referees", True),
-        ]
+        # Divider line
+        draw.line([(MAIN_X, y_main), (W - 50, y_main)], fill=SIDEBAR_COLOR, width=3)
+        y_main += 30
 
-        for title, key, multiline in sections:
-            value = data.get(key, "").strip()
-            if not value or value.lower() == "skip":
-                continue
+        # Main sections
+        def draw_main_section(title, text, y_pos, is_bullet=False):
+            if not text or text.strip().lower() in ["skip", "none", "n/a"]:
+                return y_pos
+            
+            draw.text((MAIN_X, y_pos), title, fill=SIDEBAR_COLOR, font=header_font)
+            y_pos += 35
+            
+            for line in text.split("\n"):
+                if line.strip():
+                    for wrapped in wrap_text(line.strip(), 65):
+                        if is_bullet:
+                            draw.text((MAIN_X, y_pos), "•", fill=TEXT_COLOR, font=body_font)
+                            draw.text((MAIN_X + 20, y_pos), wrapped, fill=TEXT_COLOR, font=body_font)
+                        else:
+                            draw.text((MAIN_X, y_pos), wrapped, fill=TEXT_COLOR, font=body_font)
+                        y_pos += 28
+            return y_pos + 15
 
-            draw.text((margin, y), title, fill="black", font=header_font)
-            y += 35
+        y_main = draw_main_section("PROFILE", data.get("summary"), y_main)
+        y_main = draw_main_section("WORK EXPERIENCE", data.get("experience"), y_main, is_bullet=True)
+        y_main = draw_main_section("EDUCATION", data.get("education"), y_main, is_bullet=True)
 
-            if multiline:
-                for line in value.split("\n"):
-                    if line.strip():
-                        for wl in wrap_text(line.strip(), 70):
-                            draw.text((margin, y), wl, fill="black", font=body_font)
-                            y += 25
-            else:
-                for line in wrap_text(value, 70):
-                    draw.text((margin, y), line, fill="black", font=body_font)
-                    y += 25
-
-            y += 15
-
-            if y > H - 200:
-                break
-
+        # --- SAVE AND SEND ---
         pdf_name = data.get("name", "CV").replace(" ", "_") + "_CV.pdf"
         img.save("cv.pdf", "PDF", resolution=150.0)
 
-        cloud_url = upload_to_cloud("cv.pdf",
-            resource_type="raw", folder="saviour/cv")
+        cloud_url = upload_to_cloud("cv.pdf", resource_type="raw", folder="saviour/cv")
 
         with open("cv.pdf", "rb") as f:
             bot.send_document(chat_id, f,
                 visible_file_name=pdf_name,
-                caption="📝 Your CV is ready!\n\n"
+                caption="📝 Your professional CV is ready!\n\n"
                         "Send /start → Tools → CV Builder to make another.")
 
         if cloud_url:
@@ -3625,8 +3643,9 @@ def generate_cv(uid, chat_id, data):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ CV generation error: {e}")
         clear_cv_data(uid)
-        set_mode(uid, "voice")
-
+        set_mode(uid, "voice")         
+        
+        
 # ---------- VOICE TRANSLATOR ----------
 def handle_voice_translate(uid, chat_id, file_id, target_lang):
     if not can_use(uid, "voicetrans"):
