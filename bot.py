@@ -3510,7 +3510,7 @@ def wrap_text(text, max_chars):
         lines.append(current)
     return lines
 
-   def generate_cv(uid, chat_id, data):
+      def generate_cv(uid, chat_id, data):
     if not can_use(uid, "cv"):
         bot.send_message(chat_id,
             f"🔒 *Free limit reached*\n\n"
