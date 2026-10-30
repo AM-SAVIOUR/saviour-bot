@@ -10,6 +10,7 @@ from telebot.types import (
 )
 import edge_tts
 import asyncio
+import html 
 import requests
 import io
 import json
@@ -25,6 +26,7 @@ from deep_translator import GoogleTranslator
 from pypdf import PdfReader, PdfWriter
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
+import threading 
 
 # ---------- CONFIG ----------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
