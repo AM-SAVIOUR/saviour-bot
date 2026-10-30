@@ -2268,23 +2268,24 @@ def process_ttt_move(uid, chat_id, game_id, position, message_id):
         return
 
     # Bot move if vs_bot
-    if game["vs_bot"]:
-        bot_pos = ttt_bot_move(board, game["difficulty"])
-        if bot_pos is not None:
-            board[bot_pos] = "O"
+if game["vs_bot"]:
+    bot_pos = ttt_bot_move(board, game["difficulty"])
+    if bot_pos is not None:
+        board[bot_pos] = "O"
 
-        winner = ttt_check_winner(board)
-        if winner == "O":
-            update_ttt_game(game_id, "".join(board), game["turn"], "lost")
-            record_game_result(uid, "loss", game["difficulty"])
-        elif winner == "draw":
-            update_ttt_game(game_id, "".join(board), game["turn"], "draw")
-            record_game_result(uid, "draw", game["difficulty"])
-        else:
-            update_ttt_game(game_id, "".join(board), game["turn"], "playing")
+    winner = ttt_check_winner(board)
+    if winner == "O":
+        update_ttt_game(game_id, "".join(board), game["turn"], "lost")
+        record_game_result(uid, "loss", game["difficulty"])
+    elif winner == "draw":
+        update_ttt_game(game_id, "".join(board), game["turn"], "draw")
+        record_game_result(uid, "draw", game["difficulty"])
+    else:
+        update_ttt_game(game_id, "".join(board), game["turn"], "playing")
 
-        game = get_ttt_game(game_id)
-        render_ttt(chat_id, game, message_id)
+    # Fetch fresh game state and render
+    game = get_ttt_game(game_id)
+    render_ttt(chat_id, game, message_id)
 
 # ---------- TRIVIA LOGIC (database-based) ----------
 def start_trivia(uid, chat_id, message_id=None):
