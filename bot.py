@@ -1070,12 +1070,15 @@ def fetch_trivia_questions():
         if data.get("response_code") == 0:
             questions = []
             for item in data["results"]:
-                correct = item["correct_answer"]
-                incorrect = item["incorrect_answers"]
+                # Clean the HTML entities (like &#039; and &quot;)
+                correct = html.unescape(item["correct_answer"])
+                incorrect = [html.unescape(i) for i in item["incorrect_answers"]]
+                question_text = html.unescape(item["question"])
+                
                 options = [correct] + incorrect
                 random.shuffle(options)
                 questions.append({
-                    "q": item["question"],
+                    "q": question_text,
                     "a": correct,
                     "options": options
                 })
@@ -1085,7 +1088,7 @@ def fetch_trivia_questions():
 
     # Fallback
     return random.sample(TRIVIA_FALLBACK, min(5, len(TRIVIA_FALLBACK)))
-
+    
 # ---------- AUTO SET WEBHOOK ----------
 def set_webhook():
     try:
